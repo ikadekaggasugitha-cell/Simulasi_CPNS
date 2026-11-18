@@ -32,8 +32,19 @@ CREATE TABLE IF NOT EXISTS questions (
 
 CREATE INDEX IF NOT EXISTS idx_questions_exam_kategori ON questions(exam_type, kategori);
 
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
   exam_type TEXT NOT NULL CHECK (exam_type IN ('SKD', 'SKB')),
   session_mode TEXT NOT NULL DEFAULT 'PRACTICE' CHECK (session_mode IN ('REAL', 'PRACTICE')),
   session_number INTEGER NOT NULL DEFAULT 1,
@@ -55,9 +66,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   breakdown_skor TEXT NOT NULL DEFAULT '[]',
   topik_rekomendasi TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  completed_at TEXT DEFAULT NULL
+  completed_at TEXT DEFAULT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_user_exam_mode ON sessions(user_id, exam_type, session_mode, id DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_exam_mode ON sessions(exam_type, session_mode, id DESC);
 
 CREATE TABLE IF NOT EXISTS session_answers (

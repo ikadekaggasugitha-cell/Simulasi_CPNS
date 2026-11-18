@@ -16,6 +16,7 @@ import { SessionHistoryTable } from './SessionHistoryTable';
 export const SkdDashboardView: React.FC = () => {
   const {
     navigate,
+    currentUser,
     bankStats,
     skdSessions,
     startSkdSimulation,
@@ -57,7 +58,7 @@ export const SkdDashboardView: React.FC = () => {
             Dashboard &amp; Portal Sesi SKD
           </h1>
           <p className="text-sm text-slate-600">
-            Pilih antara simulasi resmi CAT BKN terkunci atau mode latihan kustom untuk TWK, TIU, dan TKP.
+            Selamat datang, <span className="font-semibold text-slate-900">{currentUser?.name}</span>. Pilih simulasi resmi CAT BKN terkunci atau mode latihan kustom untuk TWK, TIU, dan TKP.
           </p>
         </div>
 

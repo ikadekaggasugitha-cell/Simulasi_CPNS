@@ -1,29 +1,64 @@
 import type {
+  AuthResponse,
+  AuthUser,
   CategoryMeta,
   CreateSkbSessionPayload,
   CreateSkdSessionPayload,
   ExamType,
   HintResponse,
+  LoginPayload,
   OptionKey,
   QuestionBankStats,
   QuestionRecord,
+  RegisterPayload,
   SessionDetailResponse,
   SessionSummary,
 } from '../shared/types';
+import { ApiError } from './errors';
 import {
   localCreateSkbSession,
   localCreateSkdSession,
   localDeleteSession,
   localFetchAnswerHint,
+  localFetchCurrentUser,
   localFetchHealth,
   localFetchQuestionsBank,
   localFetchSessionDetail,
   localFetchSessions,
+  localLoginUser,
+  localLogoutUser,
+  localRegisterUser,
   localSaveSessionAnswer,
   localSubmitSession,
 } from './localEngine';
 
+export { ApiError };
+
+const AUTH_TOKEN_KEY = 'cat_asn_jwt_token_v1';
+
 let backendModePromise: Promise<'remote' | 'local'> | null = null;
+
+export function getStoredToken(): string | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    return window.localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredToken(token: string | null): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    if (token) {
+      window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+    } else {
+      window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
 
 async function detectBackendMode(): Promise<'remote' | 'local'> {
   if (import.meta.env.VITE_STORAGE_MODE === 'local') {
@@ -55,17 +90,29 @@ async function detectBackendMode(): Promise<'remote' | 'local'> {
 }
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  if (options?.headers && typeof options.headers === 'object' && !Array.isArray(options.headers)) {
+    Object.assign(headers, options.headers);
+  }
+
   const res = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers || {}),
-    },
+    credentials: 'include',
     ...options,
+    headers,
   });
 
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
-    throw new Error(
+    if (res.status === 401) {
+      setStoredToken(null);
+    }
+    throw new ApiError(
+      res.status,
       typeof errBody?.error === 'string'
         ? errBody.error
         : `Permintaan gagal (${res.status})`
@@ -84,6 +131,49 @@ export async function fetchHealth(): Promise<{
     return localFetchHealth();
   }
   return requestJson('/api/health');
+}
+
+export async function registerAccount(payload: RegisterPayload): Promise<AuthResponse> {
+  if ((await detectBackendMode()) === 'local') {
+    const res = await localRegisterUser(payload);
+    setStoredToken(res.token);
+    return res;
+  }
+  const res = await requestJson<AuthResponse>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  setStoredToken(res.token);
+  return res;
+}
+
+export async function loginAccount(payload: LoginPayload): Promise<AuthResponse> {
+  if ((await detectBackendMode()) === 'local') {
+    const res = await localLoginUser(payload);
+    setStoredToken(res.token);
+    return res;
+  }
+  const res = await requestJson<AuthResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  setStoredToken(res.token);
+  return res;
+}
+
+export async function logoutAccount(): Promise<{ ok: boolean }> {
+  setStoredToken(null);
+  if ((await detectBackendMode()) === 'local') {
+    return localLogoutUser();
+  }
+  return requestJson('/api/auth/logout', { method: 'POST' });
+}
+
+export async function fetchCurrentUser(): Promise<{ user: AuthUser }> {
+  if ((await detectBackendMode()) === 'local') {
+    return localFetchCurrentUser();
+  }
+  return requestJson('/api/auth/me');
 }
 
 export async function fetchSessions(

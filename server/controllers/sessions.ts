@@ -51,6 +51,7 @@ export interface DbQuestionRow {
 
 export interface DbSessionRow {
   id: number;
+  user_id: number;
   exam_type: ExamType;
   session_mode: SessionMode;
   session_number: number;
@@ -217,6 +218,7 @@ function buildExamItems(
 
 function getUsageMapForExamType(
   db: Database.Database,
+  userId: number,
   examType: ExamType
 ): Map<number, QuestionUsageStat> {
   const usageRows = db
@@ -225,11 +227,11 @@ function getUsageMapForExamType(
       SELECT sa.question_id, COUNT(*) AS usage_count, MAX(sa.session_id) AS last_session_id
       FROM session_answers sa
       JOIN sessions s ON s.id = sa.session_id
-      WHERE s.exam_type = ?
+      WHERE s.user_id = ? AND s.exam_type = ?
       GROUP BY sa.question_id
     `
     )
-    .all(examType) as Array<{
+    .all(userId, examType) as Array<{
     question_id: number;
     usage_count: number;
     last_session_id: number;
@@ -245,15 +247,50 @@ function getUsageMapForExamType(
   return map;
 }
 
+export function fetchUserSessions(
+  db: Database.Database,
+  userId: number,
+  examType?: string,
+  sessionMode?: string
+): SessionSummary[] {
+  const where: string[] = ['user_id = ?'];
+  const params: Array<string | number> = [userId];
+
+  if (examType === 'SKD' || examType === 'SKB') {
+    where.push('exam_type = ?');
+    params.push(examType);
+  }
+  if (sessionMode === 'REAL' || sessionMode === 'PRACTICE') {
+    where.push('session_mode = ?');
+    params.push(sessionMode);
+  }
+
+  const rows = db
+    .prepare(`SELECT * FROM sessions WHERE ${where.join(' AND ')} ORDER BY id DESC`)
+    .all(...params) as DbSessionRow[];
+
+  return rows.map(formatSessionSummary);
+}
+
 export function fetchSessionDetail(
   db: Database.Database,
-  sessionId: number
-): SessionDetailResponse | null {
+  sessionId: number,
+  currentUserId: number
+): { status: number; data?: SessionDetailResponse; error?: string } {
   const sessionRow = db
     .prepare('SELECT * FROM sessions WHERE id = ?')
     .get(sessionId) as DbSessionRow | undefined;
 
-  if (!sessionRow) return null;
+  if (!sessionRow) {
+    return { status: 404, error: 'Sesi ujian tidak ditemukan.' };
+  }
+
+  if (sessionRow.user_id !== currentUserId) {
+    return {
+      status: 403,
+      error: 'Akses ditolak (403 Forbidden): Anda tidak memiliki izin melihat sesi ujian pengguna lain.',
+    };
+  }
 
   const answerRows = db
     .prepare(
@@ -289,13 +326,17 @@ export function fetchSessionDetail(
     .all(sessionId) as DbSessionAnswerJoinedRow[];
 
   return {
-    session: formatSessionSummary(sessionRow),
-    items: buildExamItems(answerRows, sessionRow.status === 'COMPLETED'),
+    status: 200,
+    data: {
+      session: formatSessionSummary(sessionRow),
+      items: buildExamItems(answerRows, sessionRow.status === 'COMPLETED'),
+    },
   };
 }
 
 export function createSkdSession(
   db: Database.Database,
+  userId: number,
   payload: Partial<CreateSkdSessionPayload>
 ): { status: number; data?: SessionDetailResponse; error?: string } {
   const sessionMode: SessionMode =
@@ -324,7 +365,7 @@ export function createSkdSession(
   }
 
   const counts = allocateSkdCategoryCounts(sessionMode, totalRequested);
-  const usageMap = getUsageMapForExamType(db, 'SKD');
+  const usageMap = getUsageMapForExamType(db, userId, 'SKD');
   const selectedQuestions: DbQuestionRow[] = [];
 
   for (const cat of SKD_CATEGORIES) {
@@ -345,9 +386,9 @@ export function createSkdSession(
 
   const nextRow = db
     .prepare(
-      "SELECT COALESCE(MAX(session_number), 0) AS maxNum FROM sessions WHERE exam_type = 'SKD' AND session_mode = ?"
+      "SELECT COALESCE(MAX(session_number), 0) AS maxNum FROM sessions WHERE user_id = ? AND exam_type = 'SKD' AND session_mode = ?"
     )
-    .get(sessionMode) as { maxNum: number };
+    .get(userId, sessionMode) as { maxNum: number };
   const sessionNumber = nextRow.maxNum + 1;
   const namaSesi =
     sessionMode === 'REAL'
@@ -364,10 +405,10 @@ export function createSkdSession(
 
   const insertSession = db.prepare(`
     INSERT INTO sessions (
-      exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
+      user_id, exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
       jumlah_per_kategori, total_soal, batas_waktu_detik, durasi_pengerjaan_detik,
       status, skor_maksimal, created_at
-    ) VALUES ('SKD', ?, ?, ?, ?, ?, ?, ?, ?, 0, 'IN_PROGRESS', ?, ?)
+    ) VALUES (?, 'SKD', ?, ?, ?, ?, ?, ?, ?, ?, 0, 'IN_PROGRESS', ?, ?)
   `);
 
   const insertAnswer = db.prepare(`
@@ -378,6 +419,7 @@ export function createSkdSession(
 
   const sessionId = db.transaction(() => {
     const info = insertSession.run(
+      userId,
       sessionMode,
       sessionNumber,
       namaSesi,
@@ -396,12 +438,15 @@ export function createSkdSession(
     return id;
   })();
 
-  const detail = fetchSessionDetail(db, sessionId);
-  return detail ? { status: 201, data: detail } : { status: 500, error: 'Gagal membuat sesi SKD.' };
+  const detail = fetchSessionDetail(db, sessionId, userId);
+  return detail.data
+    ? { status: 201, data: detail.data }
+    : { status: 500, error: 'Gagal membuat sesi SKD.' };
 }
 
 export function createSkbSession(
   db: Database.Database,
+  userId: number,
   payload: Partial<CreateSkbSessionPayload>
 ): { status: number; data?: SessionDetailResponse; error?: string } {
   const sessionMode: SessionMode =
@@ -430,7 +475,7 @@ export function createSkbSession(
   }
 
   const counts = allocateSkbCategoryCounts(sessionMode, totalRequested);
-  const usageMap = getUsageMapForExamType(db, 'SKB');
+  const usageMap = getUsageMapForExamType(db, userId, 'SKB');
   const selectedQuestions: DbQuestionRow[] = [];
 
   for (const cat of SKB_CATEGORIES) {
@@ -451,9 +496,9 @@ export function createSkbSession(
 
   const nextRow = db
     .prepare(
-      "SELECT COALESCE(MAX(session_number), 0) AS maxNum FROM sessions WHERE exam_type = 'SKB' AND session_mode = ?"
+      "SELECT COALESCE(MAX(session_number), 0) AS maxNum FROM sessions WHERE user_id = ? AND exam_type = 'SKB' AND session_mode = ?"
     )
-    .get(sessionMode) as { maxNum: number };
+    .get(userId, sessionMode) as { maxNum: number };
   const sessionNumber = nextRow.maxNum + 1;
   const namaSesi =
     sessionMode === 'REAL'
@@ -470,10 +515,10 @@ export function createSkbSession(
 
   const insertSession = db.prepare(`
     INSERT INTO sessions (
-      exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
+      user_id, exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
       jumlah_per_kategori, total_soal, batas_waktu_detik, durasi_pengerjaan_detik,
       status, skor_maksimal, created_at
-    ) VALUES ('SKB', ?, ?, ?, ?, ?, ?, ?, ?, 0, 'IN_PROGRESS', ?, ?)
+    ) VALUES (?, 'SKB', ?, ?, ?, ?, ?, ?, ?, ?, 0, 'IN_PROGRESS', ?, ?)
   `);
 
   const insertAnswer = db.prepare(`
@@ -484,6 +529,7 @@ export function createSkbSession(
 
   const sessionId = db.transaction(() => {
     const info = insertSession.run(
+      userId,
       sessionMode,
       sessionNumber,
       namaSesi,
@@ -502,21 +548,33 @@ export function createSkbSession(
     return id;
   })();
 
-  const detail = fetchSessionDetail(db, sessionId);
-  return detail ? { status: 201, data: detail } : { status: 500, error: 'Gagal membuat sesi SKB.' };
+  const detail = fetchSessionDetail(db, sessionId, userId);
+  return detail.data
+    ? { status: 201, data: detail.data }
+    : { status: 500, error: 'Gagal membuat sesi SKB.' };
 }
 
 export function buildHintResponse(
   db: Database.Database,
   sessionId: number,
-  answerId: number
+  answerId: number,
+  currentUserId: number
 ): { status: number; data?: HintResponse; error?: string } {
   const sessionState = db
-    .prepare('SELECT session_mode, status FROM sessions WHERE id = ?')
-    .get(sessionId) as { session_mode: SessionMode; status: 'IN_PROGRESS' | 'COMPLETED' } | undefined;
+    .prepare('SELECT user_id, session_mode, status FROM sessions WHERE id = ?')
+    .get(sessionId) as
+    | { user_id: number; session_mode: SessionMode; status: 'IN_PROGRESS' | 'COMPLETED' }
+    | undefined;
 
   if (!sessionState) {
     return { status: 404, error: 'Sesi tidak ditemukan.' };
+  }
+
+  if (sessionState.user_id !== currentUserId) {
+    return {
+      status: 403,
+      error: 'Akses ditolak (403 Forbidden): Anda tidak memiliki izin mengakses sesi ujian pengguna lain.',
+    };
   }
 
   // Strictly block real-time hint endpoint while Mode Real exam is still in progress
@@ -590,6 +648,7 @@ export function buildHintResponse(
 export function saveAnswerRealtime(
   db: Database.Database,
   sessionId: number,
+  currentUserId: number,
   body: {
     answerId?: number;
     selectedLabel?: OptionKey | null;
@@ -598,10 +657,18 @@ export function saveAnswerRealtime(
   }
 ): { status: number; error?: string } {
   const sessionRow = db
-    .prepare('SELECT id, status, durasi_pengerjaan_detik FROM sessions WHERE id = ?')
-    .get(sessionId) as Pick<DbSessionRow, 'id' | 'status' | 'durasi_pengerjaan_detik'> | undefined;
+    .prepare('SELECT id, user_id, status, durasi_pengerjaan_detik FROM sessions WHERE id = ?')
+    .get(sessionId) as
+    | Pick<DbSessionRow, 'id' | 'user_id' | 'status' | 'durasi_pengerjaan_detik'>
+    | undefined;
 
   if (!sessionRow) return { status: 404, error: 'Sesi tidak ditemukan.' };
+  if (sessionRow.user_id !== currentUserId) {
+    return {
+      status: 403,
+      error: 'Akses ditolak (403 Forbidden): Anda tidak memiliki izin mengubah sesi ujian pengguna lain.',
+    };
+  }
   if (sessionRow.status !== 'IN_PROGRESS') {
     return { status: 400, error: 'Sesi sudah diselesaikan dan tidak dapat diubah.' };
   }
@@ -649,6 +716,7 @@ export function saveAnswerRealtime(
 export function submitExamSession(
   db: Database.Database,
   sessionId: number,
+  currentUserId: number,
   elapsedSeconds?: number
 ): { status: number; data?: SessionDetailResponse; error?: string } {
   const sessionRow = db
@@ -657,9 +725,18 @@ export function submitExamSession(
 
   if (!sessionRow) return { status: 404, error: 'Sesi tidak ditemukan.' };
 
+  if (sessionRow.user_id !== currentUserId) {
+    return {
+      status: 403,
+      error: 'Akses ditolak (403 Forbidden): Anda tidak memiliki izin menyelesaikan sesi ujian pengguna lain.',
+    };
+  }
+
   if (sessionRow.status === 'COMPLETED') {
-    const existing = fetchSessionDetail(db, sessionId);
-    return existing ? { status: 200, data: existing } : { status: 404, error: 'Sesi tidak ditemukan.' };
+    const existing = fetchSessionDetail(db, sessionId, currentUserId);
+    return existing.data
+      ? { status: 200, data: existing.data }
+      : { status: existing.status, error: existing.error };
   }
 
   const answerRows = db
@@ -769,6 +846,32 @@ export function submitExamSession(
     );
   })();
 
-  const detail = fetchSessionDetail(db, sessionId);
-  return detail ? { status: 200, data: detail } : { status: 500, error: 'Gagal menyimpan hasil.' };
+  const detail = fetchSessionDetail(db, sessionId, currentUserId);
+  return detail.data
+    ? { status: 200, data: detail.data }
+    : { status: 500, error: 'Gagal menyimpan hasil.' };
+}
+
+export function deleteUserSession(
+  db: Database.Database,
+  sessionId: number,
+  currentUserId: number
+): { status: number; error?: string } {
+  const sessionRow = db
+    .prepare('SELECT id, user_id FROM sessions WHERE id = ?')
+    .get(sessionId) as { id: number; user_id: number } | undefined;
+
+  if (!sessionRow) {
+    return { status: 404, error: 'Sesi tidak ditemukan.' };
+  }
+
+  if (sessionRow.user_id !== currentUserId) {
+    return {
+      status: 403,
+      error: 'Akses ditolak (403 Forbidden): Anda tidak memiliki izin menghapus sesi ujian pengguna lain.',
+    };
+  }
+
+  db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(sessionId, currentUserId);
+  return { status: 200 };
 }

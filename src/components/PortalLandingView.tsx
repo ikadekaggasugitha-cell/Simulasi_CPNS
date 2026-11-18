@@ -13,6 +13,7 @@ import { SessionHistoryTable } from './SessionHistoryTable';
 export const PortalLandingView: React.FC = () => {
   const {
     navigate,
+    currentUser,
     bankStats,
     skdSessions,
     skbSessions,
@@ -42,7 +43,7 @@ export const PortalLandingView: React.FC = () => {
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2 max-w-3xl">
           <p className="text-xs font-bold uppercase tracking-wider text-blue-900">
-            Platform Persiapan CAT CPNS Terstruktur
+            Selamat datang, {currentUser?.name ?? 'Peserta'} · {currentUser?.email}
           </p>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
             Pilih Jalur Simulasi: SKD Dasar atau SKB Bidang IT

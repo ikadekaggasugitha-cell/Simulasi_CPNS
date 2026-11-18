@@ -7,25 +7,35 @@ import React, {
   useState,
 } from 'react';
 import type {
+  AuthUser,
   CategoryMeta,
   CreateSkbSessionPayload,
   CreateSkdSessionPayload,
   ExamType,
+  LoginPayload,
   QuestionBankStats,
+  RegisterPayload,
   SessionDetailResponse,
   SessionMode,
   SessionSummary,
 } from '../shared/types';
 import {
+  ApiError,
   createSkbSession,
   createSkdSession,
   deleteSession,
+  fetchCurrentUser,
   fetchHealth,
   fetchSessionDetail,
   fetchSessions,
+  loginAccount,
+  logoutAccount,
+  registerAccount,
 } from '../utils/api';
 
 export type AppRoute =
+  | { kind: 'login' }
+  | { kind: 'register' }
   | { kind: 'portal' }
   | { kind: 'skd-dashboard' }
   | { kind: 'skb-dashboard' }
@@ -39,6 +49,8 @@ export type AppRoute =
 
 export function parseRoute(pathname: string): AppRoute {
   const clean = pathname.replace(/\/+$/, '') || '/';
+  if (clean === '/login') return { kind: 'login' };
+  if (clean === '/register') return { kind: 'register' };
   if (clean === '/dashboard/skd') return { kind: 'skd-dashboard' };
   if (clean === '/dashboard/skb') return { kind: 'skb-dashboard' };
   if (clean === '/test/skd/setup') return { kind: 'skd-setup' };
@@ -56,8 +68,16 @@ export function parseRoute(pathname: string): AppRoute {
   return { kind: 'portal' };
 }
 
+export function isPublicAuthRoute(route: AppRoute): boolean {
+  return route.kind === 'login' || route.kind === 'register';
+}
+
 export function routeToPath(route: AppRoute): string {
   switch (route.kind) {
+    case 'login':
+      return '/login';
+    case 'register':
+      return '/register';
     case 'portal':
       return '/';
     case 'skd-dashboard':
@@ -84,11 +104,19 @@ export function routeToPath(route: AppRoute): string {
 interface NavigateOptions {
   bankExamType?: ExamType;
   setupMode?: SessionMode;
+  preserveError?: boolean;
+  replace?: boolean;
 }
 
 interface ExamContextValue {
   route: AppRoute;
   navigate: (path: string, options?: NavigateOptions) => void;
+  currentUser: AuthUser | null;
+  authChecked: boolean;
+  authSubmitting: boolean;
+  login: (payload: LoginPayload) => Promise<void>;
+  register: (payload: RegisterPayload) => Promise<void>;
+  logout: () => Promise<void>;
   bankStats: QuestionBankStats | null;
   categories: CategoryMeta[];
   skdSessions: SessionSummary[];
@@ -118,6 +146,10 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [route, setRoute] = useState<AppRoute>(() =>
     parseRoute(window.location.pathname)
   );
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+
   const [bankStats, setBankStats] = useState<QuestionBankStats | null>(null);
   const [categories, setCategories] = useState<CategoryMeta[]>([]);
   const [skdSessions, setSkdSessions] = useState<SessionSummary[]>([]);
@@ -130,6 +162,8 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [bankDefaultExamType, setBankDefaultExamType] = useState<ExamType>('SKD');
   const [preferredSetupMode, setPreferredSetupMode] = useState<SessionMode>('REAL');
 
+  const clearError = useCallback(() => setError(null), []);
+
   const navigate = useCallback((path: string, options?: NavigateOptions) => {
     if (options?.bankExamType) {
       setBankDefaultExamType(options.bankExamType);
@@ -139,10 +173,16 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     const nextRoute = parseRoute(path);
     if (window.location.pathname !== path) {
-      window.history.pushState({}, '', path);
+      if (options?.replace) {
+        window.history.replaceState({}, '', path);
+      } else {
+        window.history.pushState({}, '', path);
+      }
     }
     setRoute(nextRoute);
-    setError(null);
+    if (!options?.preserveError) {
+      setError(null);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
@@ -154,48 +194,157 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  const refreshSessionsByType = useCallback(async (examType: ExamType) => {
-    try {
-      const res = await fetchSessions(examType);
-      if (examType === 'SKD') setSkdSessions(res.sessions);
-      else setSkbSessions(res.sessions);
-    } catch {
-      // Preserve existing session lists on transient failure
+  const handleUnauthorized = useCallback(() => {
+    setCurrentUser(null);
+    setSkdSessions([]);
+    setSkbSessions([]);
+    setActiveDetail(null);
+    if (!isPublicAuthRoute(parseRoute(window.location.pathname))) {
+      navigate('/login', { replace: true });
     }
-  }, []);
+  }, [navigate]);
 
-  const refreshAll = useCallback(async () => {
+  const loadProtectedData = useCallback(async () => {
     setLoading(true);
     try {
-      const [healthRes, skdRes, skbRes] = await Promise.all([
-        fetchHealth(),
+      const [skdRes, skbRes] = await Promise.all([
         fetchSessions('SKD'),
         fetchSessions('SKB'),
       ]);
-      setBankStats(healthRes.bankStats);
-      setCategories(healthRes.categories);
       setSkdSessions(skdRes.sessions);
       setSkbSessions(skbRes.sessions);
-      setError(null);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       setError(
-        err instanceof Error ? err.message : 'Gagal memuat data aplikasi dari server.'
+        err instanceof Error ? err.message : 'Gagal memuat riwayat sesi pengguna.'
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [handleUnauthorized]);
+
+  const refreshAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const healthRes = await fetchHealth();
+      setBankStats(healthRes.bankStats);
+      setCategories(healthRes.categories);
+    } catch {
+      // ignore health probe error when offline
+    }
+
+    try {
+      const meRes = await fetchCurrentUser();
+      setCurrentUser(meRes.user);
+      setAuthChecked(true);
+      await loadProtectedData();
+    } catch (err) {
+      setCurrentUser(null);
+      setSkdSessions([]);
+      setSkbSessions([]);
+      setActiveDetail(null);
+      setAuthChecked(true);
+      setLoading(false);
+      if (!(err instanceof ApiError && err.status === 401)) {
+        // Non-401 startup error stays recoverable
+      }
+    }
+  }, [loadProtectedData]);
 
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
 
+  // Route Guard: Protect all app routes except /login and /register
+  useEffect(() => {
+    if (!authChecked) return;
+    if (!currentUser && !isPublicAuthRoute(route)) {
+      navigate('/login', { replace: true, preserveError: true });
+    } else if (currentUser && isPublicAuthRoute(route)) {
+      navigate('/', { replace: true });
+    }
+  }, [authChecked, currentUser, route, navigate]);
+
+  const refreshSessionsByType = useCallback(
+    async (examType: ExamType) => {
+      if (!currentUser) return;
+      try {
+        const res = await fetchSessions(examType);
+        if (examType === 'SKD') setSkdSessions(res.sessions);
+        else setSkbSessions(res.sessions);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          handleUnauthorized();
+        }
+      }
+    },
+    [currentUser, handleUnauthorized]
+  );
+
+  const login = useCallback(
+    async (payload: LoginPayload) => {
+      if (authSubmitting) return;
+      setAuthSubmitting(true);
+      setError(null);
+      try {
+        const res = await loginAccount(payload);
+        setCurrentUser(res.user);
+        setActiveDetail(null);
+        await loadProtectedData();
+        navigate('/', { replace: true });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Gagal masuk ke akun.');
+      } finally {
+        setAuthSubmitting(false);
+      }
+    },
+    [authSubmitting, loadProtectedData, navigate]
+  );
+
+  const register = useCallback(
+    async (payload: RegisterPayload) => {
+      if (authSubmitting) return;
+      setAuthSubmitting(true);
+      setError(null);
+      try {
+        const res = await registerAccount(payload);
+        setCurrentUser(res.user);
+        setActiveDetail(null);
+        await loadProtectedData();
+        navigate('/', { replace: true });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Gagal mendaftarkan akun.');
+      } finally {
+        setAuthSubmitting(false);
+      }
+    },
+    [authSubmitting, loadProtectedData, navigate]
+  );
+
+  const logout = useCallback(async () => {
+    try {
+      await logoutAccount();
+    } catch {
+      // Clear client state even if network logout fails
+    }
+    setCurrentUser(null);
+    setSkdSessions([]);
+    setSkbSessions([]);
+    setActiveDetail(null);
+    setError(null);
+    navigate('/login', { replace: true });
+  }, [navigate]);
+
   // Synchronize activeDetail if URL points directly to /exam/:id or /result/:id
   useEffect(() => {
+    if (!authChecked || !currentUser) return;
     if (route.kind !== 'exam' && route.kind !== 'result') return;
     if (activeDetail && activeDetail.session.id === route.sessionId) {
       if (route.kind === 'exam' && activeDetail.session.status === 'COMPLETED') {
-        navigate(`/result/${route.sessionId}`);
+        navigate(`/result/${route.sessionId}`, { replace: true });
       }
       return;
     }
@@ -207,13 +356,17 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (cancelled) return;
         setActiveDetail(detail);
         if (route.kind === 'exam' && detail.session.status === 'COMPLETED') {
-          navigate(`/result/${route.sessionId}`);
+          navigate(`/result/${route.sessionId}`, { replace: true });
         }
       })
       .catch((err) => {
         if (cancelled) return;
+        if (err instanceof ApiError && err.status === 401) {
+          handleUnauthorized();
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Sesi ujian tidak ditemukan.');
-        navigate('/');
+        navigate('/', { replace: true, preserveError: true });
       })
       .finally(() => {
         if (!cancelled) setDetailLoading(false);
@@ -222,11 +375,11 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       cancelled = true;
     };
-  }, [route, activeDetail, navigate]);
+  }, [authChecked, currentUser, route, activeDetail, navigate, handleUnauthorized]);
 
   const startSkdSimulation = useCallback(
     async (payload: CreateSkdSessionPayload) => {
-      if (creating) return;
+      if (creating || !currentUser) return;
       setCreating(true);
       setError(null);
       try {
@@ -235,17 +388,21 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await refreshSessionsByType('SKD');
         navigate(`/exam/${detail.session.id}`);
       } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          handleUnauthorized();
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Gagal membuat sesi ujian SKD.');
       } finally {
         setCreating(false);
       }
     },
-    [creating, navigate, refreshSessionsByType]
+    [creating, currentUser, navigate, refreshSessionsByType, handleUnauthorized]
   );
 
   const startSkbSimulation = useCallback(
     async (payload: CreateSkbSessionPayload) => {
-      if (creating) return;
+      if (creating || !currentUser) return;
       setCreating(true);
       setError(null);
       try {
@@ -254,12 +411,16 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await refreshSessionsByType('SKB');
         navigate(`/exam/${detail.session.id}`);
       } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          handleUnauthorized();
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Gagal membuat sesi ujian SKB.');
       } finally {
         setCreating(false);
       }
     },
-    [creating, navigate, refreshSessionsByType]
+    [creating, currentUser, navigate, refreshSessionsByType, handleUnauthorized]
   );
 
   const openSessionById = useCallback(
@@ -274,24 +435,35 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
           navigate(`/result/${detail.session.id}`);
         }
       } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          handleUnauthorized();
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Gagal membuka detail sesi.');
       }
     },
-    [navigate]
+    [navigate, handleUnauthorized]
   );
 
-  const removeSession = useCallback(async (session: SessionSummary) => {
-    try {
-      await deleteSession(session.id);
-      if (session.exam_type === 'SKD') {
-        setSkdSessions((prev) => prev.filter((s) => s.id !== session.id));
-      } else {
-        setSkbSessions((prev) => prev.filter((s) => s.id !== session.id));
+  const removeSession = useCallback(
+    async (session: SessionSummary) => {
+      try {
+        await deleteSession(session.id);
+        if (session.exam_type === 'SKD') {
+          setSkdSessions((prev) => prev.filter((s) => s.id !== session.id));
+        } else {
+          setSkbSessions((prev) => prev.filter((s) => s.id !== session.id));
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          handleUnauthorized();
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Gagal menghapus sesi ujian.');
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal menghapus sesi ujian.');
-    }
-  }, []);
+    },
+    [handleUnauthorized]
+  );
 
   const handleExamSubmitted = useCallback(
     async (completed: SessionDetailResponse) => {
@@ -306,6 +478,12 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     () => ({
       route,
       navigate,
+      currentUser,
+      authChecked,
+      authSubmitting,
+      login,
+      register,
+      logout,
       bankStats,
       categories,
       skdSessions,
@@ -315,7 +493,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loading,
       creating,
       error,
-      clearError: () => setError(null),
+      clearError,
       bankDefaultExamType,
       setBankDefaultExamType,
       preferredSetupMode,
@@ -331,6 +509,12 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [
       route,
       navigate,
+      currentUser,
+      authChecked,
+      authSubmitting,
+      login,
+      register,
+      logout,
       bankStats,
       categories,
       skdSessions,
@@ -340,6 +524,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loading,
       creating,
       error,
+      clearError,
       bankDefaultExamType,
       preferredSetupMode,
       refreshAll,

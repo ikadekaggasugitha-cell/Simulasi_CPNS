@@ -33,7 +33,8 @@ function migrateLegacyTablesIfNeeded(db: Database.Database): void {
     sTable &&
       (!sTable.sql.includes('exam_type') ||
         !sTable.sql.includes('breakdown_skor') ||
-        !sTable.sql.includes('session_mode'))
+        !sTable.sql.includes('session_mode') ||
+        !sTable.sql.includes('user_id'))
   );
 
   if (!needsQuestionsMigration && !needsSessionsMigration) {
@@ -43,6 +44,17 @@ function migrateLegacyTablesIfNeeded(db: Database.Database): void {
   db.pragma('foreign_keys = OFF');
   try {
     db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      `);
+
       if (needsQuestionsMigration) {
         db.exec(`
           CREATE TABLE questions_new (
@@ -86,11 +98,34 @@ function migrateLegacyTablesIfNeeded(db: Database.Database): void {
       }
 
       if (needsSessionsMigration) {
-        // Check if existing sessions table already has exam_type / breakdown_skor
         const hasExamType = sTable!.sql.includes('exam_type');
+        const hasUserId = sTable!.sql.includes('user_id');
+
+        const existingCount = (
+          db.prepare('SELECT COUNT(*) AS count FROM sessions').get() as { count: number }
+        ).count;
+
+        let archiveUserId = 0;
+        if (!hasUserId && existingCount > 0) {
+          const existingArchive = db
+            .prepare("SELECT id FROM users WHERE email = 'archive@cat-asn.local'")
+            .get() as { id: number } | undefined;
+          if (existingArchive) {
+            archiveUserId = existingArchive.id;
+          } else {
+            const info = db
+              .prepare(
+                "INSERT INTO users (name, email, password_hash) VALUES ('Arsip Pra-Autentikasi', 'archive@cat-asn.local', '!disabled_legacy_archive!')"
+              )
+              .run();
+            archiveUserId = Number(info.lastInsertRowid);
+          }
+        }
+
         db.exec(`
           CREATE TABLE sessions_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
             exam_type TEXT NOT NULL CHECK (exam_type IN ('SKD', 'SKB')),
             session_mode TEXT NOT NULL DEFAULT 'PRACTICE' CHECK (session_mode IN ('REAL', 'PRACTICE')),
             session_number INTEGER NOT NULL DEFAULT 1,
@@ -112,46 +147,52 @@ function migrateLegacyTablesIfNeeded(db: Database.Database): void {
             breakdown_skor TEXT NOT NULL DEFAULT '[]',
             topik_rekomendasi TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            completed_at TEXT DEFAULT NULL
+            completed_at TEXT DEFAULT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
           );
         `);
 
-        if (hasExamType) {
+        if (hasExamType && hasUserId) {
           db.exec(`
             INSERT INTO sessions_new (
-              id, exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
+              id, user_id, exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
               jumlah_per_kategori, total_soal, batas_waktu_detik, durasi_pengerjaan_detik,
               status, skor_twk, skor_tiu, skor_tkp, skor_total, skor_maksimal,
               persentase_total, lulus_passing_grade, breakdown_skor, topik_rekomendasi,
               created_at, completed_at
             )
             SELECT
-              id,
-              exam_type,
+              id, user_id, exam_type,
               CASE WHEN paket_soal IN ('STANDAR_BKN', 'REAL_BKN') THEN 'REAL' ELSE 'PRACTICE' END,
-              session_number,
-              nama_sesi,
-              mode_waktu,
-              paket_soal,
-              jumlah_per_kategori,
-              total_soal,
-              batas_waktu_detik,
-              durasi_pengerjaan_detik,
-              status,
-              skor_twk,
-              skor_tiu,
-              skor_tkp,
-              skor_total,
-              skor_maksimal,
-              persentase_total,
-              lulus_passing_grade,
-              breakdown_skor,
-              topik_rekomendasi,
-              created_at,
-              completed_at
+              session_number, nama_sesi, mode_waktu, paket_soal,
+              jumlah_per_kategori, total_soal, batas_waktu_detik, durasi_pengerjaan_detik,
+              status, skor_twk, skor_tiu, skor_tkp, skor_total, skor_maksimal,
+              persentase_total, lulus_passing_grade, breakdown_skor, topik_rekomendasi,
+              created_at, completed_at
             FROM sessions;
           `);
-        } else {
+        } else if (hasExamType && existingCount > 0) {
+          db.prepare(`
+            INSERT INTO sessions_new (
+              id, user_id, exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
+              jumlah_per_kategori, total_soal, batas_waktu_detik, durasi_pengerjaan_detik,
+              status, skor_twk, skor_tiu, skor_tkp, skor_total, skor_maksimal,
+              persentase_total, lulus_passing_grade, breakdown_skor, topik_rekomendasi,
+              created_at, completed_at
+            )
+            SELECT
+              id, ?, exam_type,
+              CASE WHEN session_mode IN ('REAL', 'PRACTICE') THEN session_mode
+                   WHEN paket_soal IN ('STANDAR_BKN', 'REAL_BKN') THEN 'REAL'
+                   ELSE 'PRACTICE' END,
+              session_number, nama_sesi, mode_waktu, paket_soal,
+              jumlah_per_kategori, total_soal, batas_waktu_detik, durasi_pengerjaan_detik,
+              status, skor_twk, skor_tiu, skor_tkp, skor_total, skor_maksimal,
+              persentase_total, lulus_passing_grade, breakdown_skor, topik_rekomendasi,
+              created_at, completed_at
+            FROM sessions;
+          `).run(archiveUserId);
+        } else if (!hasExamType && existingCount > 0) {
           const legacySessions = db
             .prepare('SELECT * FROM sessions ORDER BY id ASC')
             .all() as Array<{
@@ -174,12 +215,12 @@ function migrateLegacyTablesIfNeeded(db: Database.Database): void {
 
           const insertSession = db.prepare(`
             INSERT INTO sessions_new (
-              id, exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
+              id, user_id, exam_type, session_mode, session_number, nama_sesi, mode_waktu, paket_soal,
               jumlah_per_kategori, total_soal, batas_waktu_detik, durasi_pengerjaan_detik,
               status, skor_twk, skor_tiu, skor_tkp, skor_total, skor_maksimal,
               persentase_total, lulus_passing_grade, breakdown_skor, topik_rekomendasi,
               created_at, completed_at
-            ) VALUES (?, 'SKD', 'PRACTICE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?)
+            ) VALUES (?, ?, 'SKD', 'PRACTICE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?)
           `);
 
           legacySessions.forEach((row, index) => {
@@ -189,6 +230,7 @@ function migrateLegacyTablesIfNeeded(db: Database.Database): void {
             const pct = maxScore > 0 ? Math.round((row.skor_total * 1000) / maxScore) / 10 : 0;
             insertSession.run(
               row.id,
+              archiveUserId,
               seq,
               migratedName,
               row.mode_waktu,

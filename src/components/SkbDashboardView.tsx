@@ -25,6 +25,7 @@ const SKB_ORDER: SkbCategory[] = [
 export const SkbDashboardView: React.FC = () => {
   const {
     navigate,
+    currentUser,
     bankStats,
     skbSessions,
     startSkbSimulation,
@@ -97,7 +98,7 @@ export const SkbDashboardView: React.FC = () => {
             Dashboard &amp; Portal Sesi SKB IT
           </h1>
           <p className="text-sm text-slate-600">
-            Pilih antara simulasi resmi 100 soal IT (90 menit, skor maks 500) atau mode latihan kustom.
+            Selamat datang, <span className="font-semibold text-slate-900">{currentUser?.name}</span>. Pilih simulasi resmi 100 soal IT (90 menit, skor maks 500) atau mode latihan kustom.
           </p>
         </div>
 

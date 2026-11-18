@@ -6,9 +6,11 @@ import {
   Cpu,
   History,
   LayoutDashboard,
+  LogOut,
   Menu,
   Play,
   ShieldCheck,
+  UserCircle2,
   X,
 } from 'lucide-react';
 import { useExamContext } from '../context/ExamContext';
@@ -82,7 +84,7 @@ const SKB_ITEMS: NavItem[] = [
 ];
 
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
-  const { route, navigate, activeDetail, bankStats } = useExamContext();
+  const { route, navigate, activeDetail, bankStats, currentUser, logout } = useExamContext();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const handleNav = (path: string) => {
@@ -212,20 +214,45 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         </nav>
       </div>
 
-      {/* Bank Summary Footer in Sidebar */}
-      <div className="border-t border-slate-200 pt-4 px-2 space-y-1.5 text-xs text-slate-500">
-        <p className="font-semibold text-slate-700">Ketersediaan Bank Soal</p>
-        <div className="flex items-center justify-between font-mono tabular-nums">
-          <span>SKD (TWK/TIU/TKP)</span>
-          <span className="font-semibold text-blue-900">
-            {bankStats ? bankStats.skdTotal.toLocaleString('id-ID') : '—'}
-          </span>
-        </div>
-        <div className="flex items-center justify-between font-mono tabular-nums">
-          <span>SKB (Prakom IT)</span>
-          <span className="font-semibold text-emerald-800">
-            {bankStats ? bankStats.skbTotal.toLocaleString('id-ID') : '—'}
-          </span>
+      {/* Active Account & Bank Summary Footer in Sidebar */}
+      <div className="border-t border-slate-200 pt-4 px-2 space-y-4 text-xs text-slate-500">
+        {currentUser && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 space-y-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <UserCircle2 className="h-5 w-5 shrink-0 text-blue-900" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-900 truncate">{currentUser.name}</p>
+                <p className="text-[11px] text-slate-500 truncate">{currentUser.email}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                void logout();
+              }}
+              className="flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-red-50 hover:text-red-700 hover:border-red-200 transition-colors"
+            >
+              <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Logout</span>
+            </button>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <p className="font-semibold text-slate-700">Ketersediaan Bank Soal</p>
+          <div className="flex items-center justify-between font-mono tabular-nums">
+            <span>SKD (TWK/TIU/TKP)</span>
+            <span className="font-semibold text-blue-900">
+              {bankStats ? bankStats.skdTotal.toLocaleString('id-ID') : '—'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between font-mono tabular-nums">
+            <span>SKB (Prakom IT)</span>
+            <span className="font-semibold text-emerald-800">
+              {bankStats ? bankStats.skbTotal.toLocaleString('id-ID') : '—'}
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -308,18 +335,41 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               </nav>
             </div>
 
-            <button
-              type="button"
-              onClick={() => navigate(topCta.path)}
-              className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs sm:text-sm font-semibold text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 ${
-                topCta.accent === 'emerald'
-                  ? 'bg-emerald-700 hover:bg-emerald-800'
-                  : 'bg-blue-900 hover:bg-blue-800'
-              }`}
-            >
-              <Play className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{topCta.label}</span>
-            </button>
+            <div className="flex items-center gap-2.5 shrink-0">
+              {currentUser && (
+                <div className="hidden sm:flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs">
+                  <UserCircle2 className="h-4 w-4 text-blue-900 shrink-0" aria-hidden="true" />
+                  <div className="max-w-[160px] truncate">
+                    <span className="font-semibold text-slate-900">{currentUser.name}</span>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => navigate(topCta.path)}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs sm:text-sm font-semibold text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 ${
+                  topCta.accent === 'emerald'
+                    ? 'bg-emerald-700 hover:bg-emerald-800'
+                    : 'bg-blue-900 hover:bg-blue-800'
+                }`}
+              >
+                <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{topCta.label}</span>
+              </button>
+
+              {currentUser && (
+                <button
+                  type="button"
+                  data-testid="header-logout-button"
+                  onClick={() => void logout()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-red-50 hover:text-red-700 hover:border-red-200 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Logout</span>
+                </button>
+              )}
+            </div>
           </div>
         </header>
 

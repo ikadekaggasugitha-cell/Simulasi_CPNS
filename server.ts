@@ -4,33 +4,43 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { getDb } from './server/db';
 import {
+  clearAuthCookie,
+  createRequireAuth,
+  setAuthCookie,
+  type AuthenticatedRequest,
+} from './server/auth';
+import { loginUser, registerUser } from './server/controllers/auth';
+import {
   buildHintResponse,
   createSkbSession,
   createSkdSession,
+  deleteUserSession,
   fetchSessionDetail,
-  formatSessionSummary,
+  fetchUserSessions,
   saveAnswerRealtime,
   submitExamSession,
   type DbQuestionRow,
-  type DbSessionRow,
 } from './server/controllers/sessions';
 import type {
   CategoryMeta,
   CreateSkbSessionPayload,
   CreateSkdSessionPayload,
+  LoginPayload,
   OptionKey,
   QuestionCategory,
+  RegisterPayload,
   TkpWeights,
 } from './src/shared/types';
 
 async function startServer() {
   const db = getDb();
+  const requireAuth = createRequireAuth(db);
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
-  // Health & Question Bank Stats (SKD + SKB separated)
+  // Health & Question Bank Stats (Public/Global metadata only — zero user sessions)
   app.get('/api/health', (_req, res) => {
     const counts = db
       .prepare('SELECT exam_type, kategori, COUNT(*) as count FROM questions GROUP BY exam_type, kategori')
@@ -71,8 +81,50 @@ async function startServer() {
     });
   });
 
-  // Question Bank Explorer (strictly filterable by examType & kategori)
-  app.get('/api/questions', (req, res) => {
+  // Authentication Routes (Register, Login, Logout, Current User)
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const body = (req.body || {}) as Partial<RegisterPayload>;
+      const result = await registerUser(db, body);
+      if (result.error || !result.data) {
+        res.status(result.status).json({ error: result.error ?? 'Registrasi gagal.' });
+        return;
+      }
+      setAuthCookie(req, res, result.data.token);
+      res.status(result.status).json(result.data);
+    } catch (err) {
+      console.error('Register error:', err);
+      res.status(500).json({ error: 'Terjadi kesalahan saat mendaftarkan akun.' });
+    }
+  });
+
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const body = (req.body || {}) as Partial<LoginPayload>;
+      const result = await loginUser(db, body);
+      if (result.error || !result.data) {
+        res.status(result.status).json({ error: result.error ?? 'Login gagal.' });
+        return;
+      }
+      setAuthCookie(req, res, result.data.token);
+      res.status(result.status).json(result.data);
+    } catch (err) {
+      console.error('Login error:', err);
+      res.status(500).json({ error: 'Terjadi kesalahan saat memverifikasi akun.' });
+    }
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    clearAuthCookie(req, res);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/auth/me', requireAuth, (req, res) => {
+    res.json({ user: (req as AuthenticatedRequest).authUser });
+  });
+
+  // Question Bank Explorer (Global/public questions accessible to authenticated users)
+  app.get('/api/questions', requireAuth, (req, res) => {
     const examType = typeof req.query.examType === 'string' ? req.query.examType.toUpperCase() : '';
     const kategori = typeof req.query.kategori === 'string' ? req.query.kategori.toUpperCase() : '';
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
@@ -122,36 +174,21 @@ async function startServer() {
     });
   });
 
-  // Isolated Session History List (supports ?examType=SKD|SKB & ?sessionMode=REAL|PRACTICE)
-  app.get('/api/sessions', (req, res) => {
+  // Isolated Session History List (ALWAYS filtered by authenticated current_user_id)
+  app.get('/api/sessions', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const examType = typeof req.query.examType === 'string' ? req.query.examType.toUpperCase() : '';
     const sessionMode = typeof req.query.sessionMode === 'string' ? req.query.sessionMode.toUpperCase() : '';
 
-    const where: string[] = [];
-    const params: string[] = [];
-    if (examType === 'SKD' || examType === 'SKB') {
-      where.push('exam_type = ?');
-      params.push(examType);
-    }
-    if (sessionMode === 'REAL' || sessionMode === 'PRACTICE') {
-      where.push('session_mode = ?');
-      params.push(sessionMode);
-    }
-
-    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-    const rows = db
-      .prepare(`SELECT * FROM sessions ${whereSql} ORDER BY id DESC`)
-      .all(...params) as DbSessionRow[];
-
-    res.json({
-      sessions: rows.map(formatSessionSummary),
-    });
+    const sessions = fetchUserSessions(db, currentUser.id, examType, sessionMode);
+    res.json({ sessions });
   });
 
-  // Dedicated Controller: Create SKD Session
-  app.post('/api/skd/sessions', (req, res) => {
+  // Dedicated Controller: Create SKD Session (user_id derived strictly from verified JWT)
+  app.post('/api/skd/sessions', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const body = (req.body || {}) as Partial<CreateSkdSessionPayload>;
-    const result = createSkdSession(db, body);
+    const result = createSkdSession(db, currentUser.id, body);
     if (result.error) {
       res.status(result.status).json({ error: result.error });
       return;
@@ -159,10 +196,11 @@ async function startServer() {
     res.status(result.status).json(result.data);
   });
 
-  // Dedicated Controller: Create SKB Session
-  app.post('/api/skb/sessions', (req, res) => {
+  // Dedicated Controller: Create SKB Session (user_id derived strictly from verified JWT)
+  app.post('/api/skb/sessions', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const body = (req.body || {}) as Partial<CreateSkbSessionPayload>;
-    const result = createSkbSession(db, body);
+    const result = createSkbSession(db, currentUser.id, body);
     if (result.error) {
       res.status(result.status).json({ error: result.error });
       return;
@@ -170,29 +208,31 @@ async function startServer() {
     res.status(result.status).json(result.data);
   });
 
-  // Fetch Session Detail (Exam or Result)
-  app.get('/api/sessions/:id', (req, res) => {
+  // Fetch Session Detail (strictly verifies session.user_id === current_user_id, returns 403 otherwise)
+  app.get('/api/sessions/:id', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: 'ID sesi tidak valid.' });
       return;
     }
 
-    const detail = fetchSessionDetail(db, id);
-    if (!detail) {
-      res.status(404).json({ error: 'Sesi ujian tidak ditemukan.' });
+    const result = fetchSessionDetail(db, id, currentUser.id);
+    if (result.error || !result.data) {
+      res.status(result.status).json({ error: result.error ?? 'Sesi ujian tidak ditemukan.' });
       return;
     }
 
-    res.json(detail);
+    res.json(result.data);
   });
 
-  // Hint / Learning Modal Endpoint (i) - blocked during active Mode Real
-  app.get('/api/sessions/:id/answers/:answerId/hint', (req, res) => {
+  // Hint / Learning Modal Endpoint (i) - enforces user_id ownership & blocks during active Mode Real
+  app.get('/api/sessions/:id/answers/:answerId/hint', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const sessionId = Number(req.params.id);
     const answerId = Number(req.params.answerId);
 
-    const hintResult = buildHintResponse(db, sessionId, answerId);
+    const hintResult = buildHintResponse(db, sessionId, answerId, currentUser.id);
     if (hintResult.error) {
       res.status(hintResult.status).json({ error: hintResult.error });
       return;
@@ -201,8 +241,9 @@ async function startServer() {
     res.json(hintResult.data);
   });
 
-  // Save/Update User Answer or Flag in Real Time
-  app.patch('/api/sessions/:id/answer', (req, res) => {
+  // Save/Update User Answer or Flag in Real Time (enforces user_id ownership)
+  app.patch('/api/sessions/:id/answer', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const sessionId = Number(req.params.id);
     const body = (req.body || {}) as {
       answerId?: number;
@@ -211,7 +252,7 @@ async function startServer() {
       elapsedSeconds?: number;
     };
 
-    const result = saveAnswerRealtime(db, sessionId, body);
+    const result = saveAnswerRealtime(db, sessionId, currentUser.id, body);
     if (result.error) {
       res.status(result.status).json({ error: result.error });
       return;
@@ -220,12 +261,13 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // Submit & Evaluate Session (auto-dispatches SKD vs SKB scoring engine)
-  app.post('/api/sessions/:id/submit', (req, res) => {
+  // Submit & Evaluate Session (enforces user_id ownership + auto-dispatches SKD vs SKB scoring)
+  app.post('/api/sessions/:id/submit', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const sessionId = Number(req.params.id);
     const { elapsedSeconds } = (req.body || {}) as { elapsedSeconds?: number };
 
-    const result = submitExamSession(db, sessionId, elapsedSeconds);
+    const result = submitExamSession(db, sessionId, currentUser.id, elapsedSeconds);
     if (result.error) {
       res.status(result.status).json({ error: result.error });
       return;
@@ -234,12 +276,13 @@ async function startServer() {
     res.json(result.data);
   });
 
-  // Delete a session from history
-  app.delete('/api/sessions/:id', (req, res) => {
+  // Delete a session from history (enforces user_id ownership)
+  app.delete('/api/sessions/:id', requireAuth, (req, res) => {
+    const currentUser = (req as AuthenticatedRequest).authUser;
     const sessionId = Number(req.params.id);
-    const result = db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
-    if (result.changes === 0) {
-      res.status(404).json({ error: 'Sesi tidak ditemukan.' });
+    const result = deleteUserSession(db, sessionId, currentUser.id);
+    if (result.error) {
+      res.status(result.status).json({ error: result.error });
       return;
     }
     res.json({ ok: true });

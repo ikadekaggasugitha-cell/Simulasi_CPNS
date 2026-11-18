@@ -1,6 +1,11 @@
 import React from 'react';
-import { ExamProvider, useExamContext } from './context/ExamContext';
+import {
+  ExamProvider,
+  isPublicAuthRoute,
+  useExamContext,
+} from './context/ExamContext';
 import { AppShell } from './components/AppShell';
+import { AuthView } from './components/AuthView';
 import { PortalLandingView } from './components/PortalLandingView';
 import { SkdDashboardView } from './components/SkdDashboardView';
 import { SkbDashboardView } from './components/SkbDashboardView';
@@ -14,11 +19,37 @@ const AppRouter: React.FC = () => {
   const {
     route,
     navigate,
+    currentUser,
+    authChecked,
     activeDetail,
     detailLoading,
     handleExamSubmitted,
     refreshSessionsByType,
   } = useExamContext();
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center space-y-2 max-w-sm w-full">
+          <div className="h-5 w-2/3 mx-auto animate-pulse rounded bg-slate-200" />
+          <p className="text-xs text-slate-500">Memverifikasi sesi akun peserta...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Public Auth Routes (/login & /register) + strict redirect guard if unauthenticated
+  if (!currentUser) {
+    return <AuthView mode={route.kind === 'register' ? 'register' : 'login'} />;
+  }
+
+  if (isPublicAuthRoute(route)) {
+    return (
+      <AppShell>
+        <PortalLandingView />
+      </AppShell>
+    );
+  }
 
   if (route.kind === 'exam') {
     if (detailLoading || !activeDetail || activeDetail.session.id !== route.sessionId) {

@@ -7,7 +7,11 @@ import {
   localFetchAnswerHint,
   localFetchHealth,
   localFetchQuestionsBank,
+  localFetchSessionDetail,
   localFetchSessions,
+  localLoginUser,
+  localLogoutUser,
+  localRegisterUser,
   localSaveSessionAnswer,
   localSubmitSession,
   setLocalEngineStorageForTest,
@@ -20,10 +24,13 @@ function createMemoryStorage() {
     setItem: (key: string, value: string) => {
       store.set(key, value);
     },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
   };
 }
 
-test('localEngine runs full Netlify static lifecycle for SKD Real & SKB Practice', async () => {
+test('localEngine runs full Netlify static lifecycle with multi-user auth & 403 isolation', async () => {
   setLocalEngineStorageForTest(createMemoryStorage());
 
   const health = await localFetchHealth();
@@ -31,6 +38,17 @@ test('localEngine runs full Netlify static lifecycle for SKD Real & SKB Practice
   assert.equal(health.bankStats.total, 1450);
   assert.equal(health.bankStats.skdTotal, 1250);
   assert.equal(health.bankStats.skbTotal, 200);
+
+  // Unauthenticated access must fail with 401
+  await assert.rejects(() => localFetchSessions('SKD'), /Autentikasi diperlukan/);
+
+  // Register User A
+  const userA = await localRegisterUser({
+    name: 'Andi Wijaya',
+    email: 'andi@example.com',
+    password: 'password123',
+  });
+  assert.equal(userA.user.name, 'Andi Wijaya');
 
   // 1. Create SKD Real session (110q, 100m, hint blocked during IN_PROGRESS)
   const skdReal = await localCreateSkdSession({ sessionMode: 'REAL' });
@@ -73,7 +91,7 @@ test('localEngine runs full Netlify static lifecycle for SKD Real & SKB Practice
   );
   assert.equal(liveHint.exam_type, 'SKB');
 
-  // 3. Isolated lists & bank search
+  // 3. Isolated lists & bank search for User A
   const skdList = await localFetchSessions('SKD');
   const skbList = await localFetchSessions('SKB');
   assert.equal(skdList.sessions.length, 1);
@@ -82,6 +100,21 @@ test('localEngine runs full Netlify static lifecycle for SKD Real & SKB Practice
   const bankSkb = await localFetchQuestionsBank({ examType: 'SKB', kategori: 'RPL' });
   assert.equal(bankSkb.total, 50);
 
+  // 4. Logout User A & Register User B -> User B cannot see or access User A's sessions
+  await localLogoutUser();
+  await localRegisterUser({
+    name: 'Siti Rahma',
+    email: 'siti@example.com',
+    password: 'password123',
+  });
+  assert.equal((await localFetchSessions('SKD')).sessions.length, 0);
+  assert.equal((await localFetchSessions('SKB')).sessions.length, 0);
+  await assert.rejects(() => localFetchSessionDetail(skdReal.session.id), /403 Forbidden/);
+  await assert.rejects(() => localDeleteSession(skbPrac.session.id), /403 Forbidden/);
+
+  // 5. Log back in as User A and delete User A's SKB session
+  await localLogoutUser();
+  await localLoginUser({ email: 'andi@example.com', password: 'password123' });
   await localDeleteSession(skbPrac.session.id);
   const skbAfterDelete = await localFetchSessions('SKB');
   assert.equal(skbAfterDelete.sessions.length, 0);

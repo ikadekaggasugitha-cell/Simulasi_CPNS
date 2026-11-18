@@ -1,3 +1,4 @@
+import bcrypt from 'bcryptjs';
 import {
   OPTION_KEYS,
   SKB_CATEGORIES,
@@ -17,6 +18,8 @@ import {
 } from '../../server/scoring';
 import type {
   AnswerStatus,
+  AuthResponse,
+  AuthUser,
   CategoryMeta,
   CategoryScoreBreakdown,
   CreateSkbSessionPayload,
@@ -25,20 +28,37 @@ import type {
   ExamQuestionItem,
   ExamType,
   HintResponse,
+  LoginPayload,
   OptionKey,
   PracticeQuantityOption,
   QuestionBankStats,
   QuestionCategory,
   QuestionRecord,
+  RegisterPayload,
   SessionDetailResponse,
   SessionMode,
   SessionStatus,
   SessionSummary,
   TimeMode,
 } from '../shared/types';
+import { ApiError } from './errors';
+
+interface StoredUser {
+  id: number;
+  name: string;
+  email: string;
+  password_hash: string;
+  created_at: string;
+}
+
+interface StoredAuthSession {
+  userId: number;
+  token: string;
+}
 
 interface StoredSession {
   id: number;
+  user_id: number;
   exam_type: ExamType;
   session_mode: SessionMode;
   session_number: number;
@@ -76,6 +96,7 @@ interface StoredAnswer {
 }
 
 interface StoredMeta {
+  nextUserId: number;
   nextSessionId: number;
   nextAnswerId: number;
 }
@@ -83,17 +104,24 @@ interface StoredMeta {
 interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
 }
 
+const KEY_USERS = 'cat_asn_users_v1';
+const KEY_AUTH = 'cat_asn_auth_v1';
 const KEY_SESSIONS = 'cat_asn_sessions_v1';
 const KEY_ANSWERS = 'cat_asn_answers_v1';
 const KEY_META = 'cat_asn_meta_v1';
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const memoryFallbackMap = new Map<string, string>();
 const memoryStorage: StorageLike = {
   getItem: (k) => memoryFallbackMap.get(k) ?? null,
   setItem: (k, v) => {
     memoryFallbackMap.set(k, v);
+  },
+  removeItem: (k) => {
+    memoryFallbackMap.delete(k);
   },
 };
 
@@ -162,6 +190,50 @@ function writeJson<T>(key: string, value: T): void {
   }
 }
 
+function getUsers(): StoredUser[] {
+  return readJson<StoredUser[]>(KEY_USERS, []);
+}
+
+function saveUsers(users: StoredUser[]): void {
+  writeJson(KEY_USERS, users);
+}
+
+function getAuthSession(): StoredAuthSession | null {
+  return readJson<StoredAuthSession | null>(KEY_AUTH, null);
+}
+
+function saveAuthSession(auth: StoredAuthSession | null): void {
+  if (!auth) {
+    try {
+      const store = getStorage();
+      if (store.removeItem) store.removeItem(KEY_AUTH);
+      else store.setItem(KEY_AUTH, '');
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  writeJson(KEY_AUTH, auth);
+}
+
+function requireLocalUser(): AuthUser {
+  const auth = getAuthSession();
+  if (!auth) {
+    throw new ApiError(401, 'Autentikasi diperlukan. Silakan login terlebih dahulu.');
+  }
+  const user = getUsers().find((u) => u.id === auth.userId);
+  if (!user) {
+    saveAuthSession(null);
+    throw new ApiError(401, 'Sesi login tidak ditemukan. Silakan login kembali.');
+  }
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    created_at: user.created_at,
+  };
+}
+
 function getSessions(): StoredSession[] {
   return readJson<StoredSession[]>(KEY_SESSIONS, []);
 }
@@ -178,11 +250,28 @@ function saveAnswers(answers: StoredAnswer[]): void {
   writeJson(KEY_ANSWERS, answers);
 }
 
+function readMeta(): StoredMeta {
+  const raw = readJson<Partial<StoredMeta>>(KEY_META, {});
+  return {
+    nextUserId: typeof raw.nextUserId === 'number' ? raw.nextUserId : 1,
+    nextSessionId: typeof raw.nextSessionId === 'number' ? raw.nextSessionId : 1,
+    nextAnswerId: typeof raw.nextAnswerId === 'number' ? raw.nextAnswerId : 1,
+  };
+}
+
+function allocateUserId(): number {
+  const meta = readMeta();
+  const userId = meta.nextUserId;
+  writeJson<StoredMeta>(KEY_META, { ...meta, nextUserId: userId + 1 });
+  return userId;
+}
+
 function allocateIds(answerCount: number): { sessionId: number; firstAnswerId: number } {
-  const meta = readJson<StoredMeta>(KEY_META, { nextSessionId: 1, nextAnswerId: 1 });
+  const meta = readMeta();
   const sessionId = meta.nextSessionId;
   const firstAnswerId = meta.nextAnswerId;
   writeJson<StoredMeta>(KEY_META, {
+    ...meta,
     nextSessionId: sessionId + 1,
     nextAnswerId: firstAnswerId + answerCount,
   });
@@ -278,10 +367,11 @@ function buildExamItems(
 function getUsageMapForExamType(
   sessions: StoredSession[],
   answers: StoredAnswer[],
+  userId: number,
   examType: ExamType
 ): Map<number, QuestionUsageStat> {
   const matchingIds = new Set(
-    sessions.filter((s) => s.exam_type === examType).map((s) => s.id)
+    sessions.filter((s) => s.user_id === userId && s.exam_type === examType).map((s) => s.id)
   );
   const map = new Map<number, QuestionUsageStat>();
   for (const ans of answers) {
@@ -297,6 +387,79 @@ function getUsageMapForExamType(
     }
   }
   return map;
+}
+
+export async function localRegisterUser(
+  payload: RegisterPayload
+): Promise<AuthResponse> {
+  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+  const password = typeof payload.password === 'string' ? payload.password : '';
+
+  if (name.length < 2) {
+    throw new ApiError(400, 'Nama lengkap minimal 2 karakter.');
+  }
+  if (!EMAIL_REGEX.test(email)) {
+    throw new ApiError(400, 'Format alamat email tidak valid.');
+  }
+  if (password.length < 6) {
+    throw new ApiError(400, 'Kata sandi minimal 6 karakter.');
+  }
+
+  const users = getUsers();
+  if (users.some((u) => u.email === email)) {
+    throw new ApiError(409, 'Email sudah terdaftar. Silakan masuk atau gunakan email lain.');
+  }
+
+  const password_hash = await bcrypt.hash(password, 8);
+  const id = allocateUserId();
+  const created_at = new Date().toISOString();
+  const newUser: StoredUser = { id, name, email, password_hash, created_at };
+  saveUsers([...users, newUser]);
+
+  const token = `local_${id}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  saveAuthSession({ userId: id, token });
+
+  return {
+    user: { id, name, email, created_at },
+    token,
+  };
+}
+
+export async function localLoginUser(payload: LoginPayload): Promise<AuthResponse> {
+  const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+  const password = typeof payload.password === 'string' ? payload.password : '';
+
+  if (!EMAIL_REGEX.test(email) || password.length === 0) {
+    throw new ApiError(400, 'Email dan kata sandi wajib diisi.');
+  }
+
+  const user = getUsers().find((u) => u.email === email);
+  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    throw new ApiError(401, 'Email atau kata sandi salah.');
+  }
+
+  const token = `local_${user.id}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  saveAuthSession({ userId: user.id, token });
+
+  return {
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      created_at: user.created_at,
+    },
+    token,
+  };
+}
+
+export async function localLogoutUser(): Promise<{ ok: boolean }> {
+  saveAuthSession(null);
+  return { ok: true };
+}
+
+export async function localFetchCurrentUser(): Promise<{ user: AuthUser }> {
+  return { user: requireLocalUser() };
 }
 
 export async function localFetchHealth(): Promise<{
@@ -339,6 +502,7 @@ export async function localFetchQuestionsBank(params?: {
   kategori?: string;
   q?: string;
 }): Promise<{ total: number; questions: QuestionRecord[] }> {
+  requireLocalUser();
   const { questions } = await loadCatalog();
   const examType = params?.examType;
   const kategori = params?.kategori?.toUpperCase();
@@ -366,8 +530,9 @@ export async function localFetchQuestionsBank(params?: {
 export async function localFetchSessions(
   examType?: ExamType
 ): Promise<{ sessions: SessionSummary[] }> {
+  const currentUser = requireLocalUser();
   const sessions = getSessions()
-    .filter((s) => !examType || s.exam_type === examType)
+    .filter((s) => s.user_id === currentUser.id && (!examType || s.exam_type === examType))
     .sort((a, b) => b.id - a.id);
 
   return {
@@ -378,6 +543,7 @@ export async function localFetchSessions(
 export async function localCreateSkdSession(
   payload: CreateSkdSessionPayload
 ): Promise<SessionDetailResponse> {
+  const currentUser = requireLocalUser();
   const { questions, byId } = await loadCatalog();
   const sessionMode: SessionMode =
     payload.sessionMode === 'REAL' || payload.sessionMode === 'PRACTICE'
@@ -391,10 +557,10 @@ export async function localCreateSkdSession(
   if (sessionMode === 'PRACTICE') {
     const qty = payload.totalSoal as PracticeQuantityOption | undefined;
     if (qty !== 20 && qty !== 50 && qty !== 75) {
-      throw new Error('Pada Mode Latihan SKD, jumlah soal harus 20, 50, atau 75 soal.');
+      throw new ApiError(400, 'Pada Mode Latihan SKD, jumlah soal harus 20, 50, atau 75 soal.');
     }
     if (payload.modeWaktu !== 'TIMED' && payload.modeWaktu !== 'UNTIMED') {
-      throw new Error('Mode waktu pada Mode Latihan tidak valid.');
+      throw new ApiError(400, 'Mode waktu pada Mode Latihan tidak valid.');
     }
     totalRequested = qty;
     modeWaktu = payload.modeWaktu;
@@ -404,7 +570,7 @@ export async function localCreateSkdSession(
   const sessions = getSessions();
   const answers = getAnswers();
   const counts = allocateSkdCategoryCounts(sessionMode, totalRequested);
-  const usageMap = getUsageMapForExamType(sessions, answers, 'SKD');
+  const usageMap = getUsageMapForExamType(sessions, answers, currentUser.id, 'SKD');
   const selectedQuestions: QuestionRecord[] = [];
 
   for (const cat of SKD_CATEGORIES) {
@@ -414,7 +580,7 @@ export async function localCreateSkdSession(
   }
 
   const maxNum = sessions
-    .filter((s) => s.exam_type === 'SKD' && s.session_mode === sessionMode)
+    .filter((s) => s.user_id === currentUser.id && s.exam_type === 'SKD' && s.session_mode === sessionMode)
     .reduce((max, s) => Math.max(max, s.session_number), 0);
   const sessionNumber = maxNum + 1;
   const namaSesi =
@@ -426,6 +592,7 @@ export async function localCreateSkdSession(
 
   const newSession: StoredSession = {
     id: sessionId,
+    user_id: currentUser.id,
     exam_type: 'SKD',
     session_mode: sessionMode,
     session_number: sessionNumber,
@@ -477,6 +644,7 @@ export async function localCreateSkdSession(
 export async function localCreateSkbSession(
   payload: CreateSkbSessionPayload
 ): Promise<SessionDetailResponse> {
+  const currentUser = requireLocalUser();
   const { questions, byId } = await loadCatalog();
   const sessionMode: SessionMode =
     payload.sessionMode === 'REAL' || payload.sessionMode === 'PRACTICE'
@@ -490,10 +658,10 @@ export async function localCreateSkbSession(
   if (sessionMode === 'PRACTICE') {
     const qty = payload.totalSoal as PracticeQuantityOption | undefined;
     if (qty !== 20 && qty !== 50 && qty !== 75) {
-      throw new Error('Pada Mode Latihan SKB, jumlah soal harus 20, 50, atau 75 soal.');
+      throw new ApiError(400, 'Pada Mode Latihan SKB, jumlah soal harus 20, 50, atau 75 soal.');
     }
     if (payload.modeWaktu !== 'TIMED' && payload.modeWaktu !== 'UNTIMED') {
-      throw new Error('Mode waktu pada Mode Latihan tidak valid.');
+      throw new ApiError(400, 'Mode waktu pada Mode Latihan tidak valid.');
     }
     totalRequested = qty;
     modeWaktu = payload.modeWaktu;
@@ -503,7 +671,7 @@ export async function localCreateSkbSession(
   const sessions = getSessions();
   const answers = getAnswers();
   const counts = allocateSkbCategoryCounts(sessionMode, totalRequested);
-  const usageMap = getUsageMapForExamType(sessions, answers, 'SKB');
+  const usageMap = getUsageMapForExamType(sessions, answers, currentUser.id, 'SKB');
   const selectedQuestions: QuestionRecord[] = [];
 
   for (const cat of SKB_CATEGORIES) {
@@ -513,7 +681,7 @@ export async function localCreateSkbSession(
   }
 
   const maxNum = sessions
-    .filter((s) => s.exam_type === 'SKB' && s.session_mode === sessionMode)
+    .filter((s) => s.user_id === currentUser.id && s.exam_type === 'SKB' && s.session_mode === sessionMode)
     .reduce((max, s) => Math.max(max, s.session_number), 0);
   const sessionNumber = maxNum + 1;
   const namaSesi =
@@ -525,6 +693,7 @@ export async function localCreateSkbSession(
 
   const newSession: StoredSession = {
     id: sessionId,
+    user_id: currentUser.id,
     exam_type: 'SKB',
     session_mode: sessionMode,
     session_number: sessionNumber,
@@ -576,10 +745,17 @@ export async function localCreateSkbSession(
 export async function localFetchSessionDetail(
   sessionId: number
 ): Promise<SessionDetailResponse> {
+  const currentUser = requireLocalUser();
   const { byId } = await loadCatalog();
   const session = getSessions().find((s) => s.id === sessionId);
   if (!session) {
-    throw new Error('Sesi ujian tidak ditemukan.');
+    throw new ApiError(404, 'Sesi ujian tidak ditemukan.');
+  }
+  if (session.user_id !== currentUser.id) {
+    throw new ApiError(
+      403,
+      'Akses ditolak (403 Forbidden): Anda tidak memiliki izin melihat sesi ujian pengguna lain.'
+    );
   }
   const answers = getAnswers().filter((a) => a.session_id === sessionId);
   return {
@@ -592,13 +768,21 @@ export async function localFetchAnswerHint(
   sessionId: number,
   answerId: number
 ): Promise<HintResponse> {
+  const currentUser = requireLocalUser();
   const { byId } = await loadCatalog();
   const session = getSessions().find((s) => s.id === sessionId);
   if (!session) {
-    throw new Error('Sesi tidak ditemukan.');
+    throw new ApiError(404, 'Sesi tidak ditemukan.');
+  }
+  if (session.user_id !== currentUser.id) {
+    throw new ApiError(
+      403,
+      'Akses ditolak (403 Forbidden): Anda tidak memiliki izin mengakses sesi ujian pengguna lain.'
+    );
   }
   if (session.session_mode === 'REAL' && session.status === 'IN_PROGRESS') {
-    throw new Error(
+    throw new ApiError(
+      403,
       'Fitur bantuan (i) dinonaktifkan selama Mode Real Ujian berlangsung. Pembahasan dapat dilihat setelah selesai ujian.'
     );
   }
@@ -650,11 +834,18 @@ export async function localSaveSessionAnswer(
     elapsedSeconds?: number;
   }
 ): Promise<{ ok: boolean }> {
+  const currentUser = requireLocalUser();
   const sessions = getSessions();
   const sIdx = sessions.findIndex((s) => s.id === sessionId);
-  if (sIdx === -1) throw new Error('Sesi tidak ditemukan.');
+  if (sIdx === -1) throw new ApiError(404, 'Sesi tidak ditemukan.');
+  if (sessions[sIdx].user_id !== currentUser.id) {
+    throw new ApiError(
+      403,
+      'Akses ditolak (403 Forbidden): Anda tidak memiliki izin mengubah sesi ujian pengguna lain.'
+    );
+  }
   if (sessions[sIdx].status !== 'IN_PROGRESS') {
-    throw new Error('Sesi sudah diselesaikan dan tidak dapat diubah.');
+    throw new ApiError(400, 'Sesi sudah diselesaikan dan tidak dapat diubah.');
   }
 
   if (typeof payload.answerId === 'number') {
@@ -662,7 +853,7 @@ export async function localSaveSessionAnswer(
     const aIdx = answers.findIndex(
       (a) => a.id === payload.answerId && a.session_id === sessionId
     );
-    if (aIdx === -1) throw new Error('Jawaban soal tidak ditemukan.');
+    if (aIdx === -1) throw new ApiError(404, 'Jawaban soal tidak ditemukan.');
     const cur = answers[aIdx];
     const nextOriginal =
       payload.selectedLabel !== undefined
@@ -700,11 +891,18 @@ export async function localSubmitSession(
   sessionId: number,
   elapsedSeconds?: number
 ): Promise<SessionDetailResponse> {
+  const currentUser = requireLocalUser();
   const { byId } = await loadCatalog();
   const sessions = getSessions();
   const sIdx = sessions.findIndex((s) => s.id === sessionId);
-  if (sIdx === -1) throw new Error('Sesi tidak ditemukan.');
+  if (sIdx === -1) throw new ApiError(404, 'Sesi tidak ditemukan.');
   const session = sessions[sIdx];
+  if (session.user_id !== currentUser.id) {
+    throw new ApiError(
+      403,
+      'Akses ditolak (403 Forbidden): Anda tidak memiliki izin menyelesaikan sesi ujian pengguna lain.'
+    );
+  }
 
   if (session.status === 'COMPLETED') {
     return localFetchSessionDetail(sessionId);
@@ -785,11 +983,19 @@ export async function localSubmitSession(
 }
 
 export async function localDeleteSession(sessionId: number): Promise<{ ok: boolean }> {
+  const currentUser = requireLocalUser();
   const sessions = getSessions();
-  const nextSessions = sessions.filter((s) => s.id !== sessionId);
-  if (nextSessions.length === sessions.length) {
-    throw new Error('Sesi tidak ditemukan.');
+  const target = sessions.find((s) => s.id === sessionId);
+  if (!target) {
+    throw new ApiError(404, 'Sesi tidak ditemukan.');
   }
+  if (target.user_id !== currentUser.id) {
+    throw new ApiError(
+      403,
+      'Akses ditolak (403 Forbidden): Anda tidak memiliki izin menghapus sesi ujian pengguna lain.'
+    );
+  }
+  const nextSessions = sessions.filter((s) => s.id !== sessionId);
   const nextAnswers = getAnswers().filter((a) => a.session_id !== sessionId);
   saveSessions(nextSessions);
   saveAnswers(nextAnswers);
