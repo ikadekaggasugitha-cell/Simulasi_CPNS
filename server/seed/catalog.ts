@@ -2,6 +2,7 @@ import { TWK_QUESTIONS } from './twk';
 import { TIU_QUESTIONS } from './tiu';
 import { TKP_QUESTIONS } from './tkp';
 import { TWK_EXTRA_QUESTIONS } from './twk_extra';
+import { TWK_HOTS_BATCH_1 } from './twk_hots_batch1';
 import { TIU_EXTRA_QUESTIONS } from './tiu_extra';
 import { TKP_EXTRA_QUESTIONS } from './tkp_extra';
 import { SKB_QUESTIONS } from './skb';
@@ -77,6 +78,7 @@ export function getAllSeedQuestions(): SeedQuestion[] {
     ...TIU_EXTRA_QUESTIONS.map((q) => ({ ...q, exam_type: 'SKD' as const })),
     ...TKP_EXTRA_QUESTIONS.map((q) => ({ ...q, exam_type: 'SKD' as const })),
     ...SKB_QUESTIONS.map((q) => ({ ...q, exam_type: 'SKB' as const })),
+    ...TWK_HOTS_BATCH_1.map((q) => ({ ...q, exam_type: 'SKD' as const })),
   ];
 }
 

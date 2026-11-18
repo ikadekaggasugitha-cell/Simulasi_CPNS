@@ -4,6 +4,7 @@ import { TWK_QUESTIONS } from './twk';
 import { TIU_QUESTIONS } from './tiu';
 import { TKP_QUESTIONS } from './tkp';
 import { TWK_EXTRA_QUESTIONS } from './twk_extra';
+import { TWK_HOTS_BATCH_1 } from './twk_hots_batch1';
 import { TIU_EXTRA_QUESTIONS } from './tiu_extra';
 import { TKP_EXTRA_QUESTIONS } from './tkp_extra';
 import { SKB_RPL_QUESTIONS } from './skb_rpl';
@@ -64,12 +65,12 @@ function assertValidCategoryBank(name: string, items: SeedQuestion[], minCount: 
   });
 }
 
-const ALL_TWK = [...TWK_QUESTIONS, ...TWK_EXTRA_QUESTIONS];
+const ALL_TWK = [...TWK_QUESTIONS, ...TWK_EXTRA_QUESTIONS, ...TWK_HOTS_BATCH_1];
 const ALL_TIU = [...TIU_QUESTIONS, ...TIU_EXTRA_QUESTIONS];
 const ALL_TKP = [...TKP_QUESTIONS, ...TKP_EXTRA_QUESTIONS];
 
-test('TWK bank has at least 375 unique valid HOTS questions', () => {
-  assertValidCategoryBank('TWK', ALL_TWK, 375);
+test('TWK bank has at least 385 unique valid HOTS questions', () => {
+  assertValidCategoryBank('TWK', ALL_TWK, 385);
 });
 
 test('TIU bank has at least 500 unique valid HOTS questions', () => {
@@ -91,9 +92,9 @@ test('SKB IT banks each have 50 unique valid HOTS questions (200 total)', () => 
   }
 });
 
-test('Combined SKD + SKB HOTS bank has 1,450 globally unique questions', () => {
+test('Combined SKD + SKB HOTS bank has 1,460 globally unique questions', () => {
   const all = [...ALL_TWK, ...ALL_TIU, ...ALL_TKP, ...SKB_QUESTIONS];
-  assert.equal(all.length, 1450);
+  assert.equal(all.length, 1460);
   const uniqueAll = new Set(all.map((q) => q.pertanyaan.trim()));
   assert.equal(uniqueAll.size, all.length, 'Global cross-category duplicate pertanyaan found');
 });

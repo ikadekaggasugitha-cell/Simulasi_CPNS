@@ -2,5 +2,7 @@
   "name": "CAT SKD Nusantara",
   "description": "Platform simulasi CAT SKD CPNS interaktif dengan bank soal HOTS TWK, TIU, dan TKP, penilaian bobot resmi, pembahasan langkah demi langkah, serta riwayat sesi belajar.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

@@ -35,8 +35,8 @@ test('localEngine runs full Netlify static lifecycle with multi-user auth & 403 
 
   const health = await localFetchHealth();
   assert.equal(health.ok, true);
-  assert.equal(health.bankStats.total, 1450);
-  assert.equal(health.bankStats.skdTotal, 1250);
+  assert.equal(health.bankStats.total, 1460);
+  assert.equal(health.bankStats.skdTotal, 1260);
   assert.equal(health.bankStats.skbTotal, 200);
 
   // Unauthenticated access must fail with 401
