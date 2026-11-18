@@ -4,6 +4,8 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # bun.lock uses lockfile format v2, which the default Bun in the build image cannot parse
+  BUN_VERSION = "1.4.4"
   VITE_STORAGE_MODE = "local"
 
 [[redirects]]
