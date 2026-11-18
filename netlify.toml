@@ -5,6 +5,7 @@
 [build.environment]
   NODE_VERSION = "22"
   NPM_FLAGS = "--legacy-peer-deps"
+  BUN_VERSION = "1.4.4"
   VITE_STORAGE_MODE = "local"
 
 [[redirects]]
