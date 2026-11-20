@@ -285,7 +285,7 @@ export const HintModal: React.FC<HintModalProps> = ({
                                 {opt.label}.
                               </span>
                               <span className="text-slate-800 leading-snug flex-1">
-                                {opt.text}
+                                <RichQuestionContent content={opt.text} variant="compact" />
                                 {isKey && (
                                   <span className="ml-2 text-xs font-semibold text-emerald-700">
                                     (Kunci Benar)
@@ -386,15 +386,18 @@ export const HintModal: React.FC<HintModalProps> = ({
                     const isSystematic = /^Metode\s*1\b/i.test(step);
                     const isTkpTop = isTkp && /^Skor\s*5\b/i.test(step);
                     const isTkpRunnerUp = isTkp && /^Skor\s*4\b/i.test(step);
+                    const isSkbRoot = isSkb && /^Akar\s*Masalah\b/i.test(step);
+                    const isSkbBest = isSkb && /^Solusi\s*Terbaik\b/i.test(step);
+                    const isSkbDistractor = isSkb && /^Analisis\s*Opsi\s*Pengecoh\b/i.test(step);
                     return (
                       <div
                         key={i}
                         className={`rounded-lg border p-3.5 text-sm leading-relaxed ${
-                          isFastTrick
-                            ? 'border-amber-200 bg-amber-50/80 text-slate-800'
-                            : isSystematic || isTkpRunnerUp
+                          isFastTrick || isSkbDistractor
+                            ? 'border-amber-200 bg-amber-50/75 text-slate-800'
+                            : isSystematic || isTkpRunnerUp || isSkbRoot
                             ? 'border-blue-200 bg-blue-50/60 text-slate-800'
-                            : isTkpTop
+                            : isTkpTop || isSkbBest
                             ? 'border-emerald-200 bg-emerald-50/70 text-slate-800'
                             : 'border-slate-200 bg-slate-50/70 text-slate-700'
                         }`}

@@ -201,15 +201,90 @@ test('TKP bank has 375 unique valid HOTS situational questions evenly split acro
   }
 });
 
-test('SKB IT banks each have 50 unique valid HOTS questions (200 total)', () => {
-  assertValidCategoryBank('RPL', SKB_RPL_QUESTIONS, 50);
-  assertValidCategoryBank('BASIS_DATA', SKB_BASIS_DATA_QUESTIONS, 50);
-  assertValidCategoryBank('MANAJEMEN_DATA', SKB_MANAJEMEN_DATA_QUESTIONS, 50);
-  assertValidCategoryBank('JARINGAN_DASAR', SKB_JARINGAN_QUESTIONS, 50);
-  assert.equal(SKB_QUESTIONS.length, 200);
-  for (const q of SKB_QUESTIONS) {
-    assert.equal(q.exam_type, 'SKB');
+test('SKB IT banks each have 50 unique valid HOTS C4-C6 questions (200 total) with balanced A-E keys and 3-part explanations', () => {
+  const skbBanks: ReadonlyArray<readonly [string, SeedQuestion[]]> = [
+    ['RPL', SKB_RPL_QUESTIONS],
+    ['BASIS_DATA', SKB_BASIS_DATA_QUESTIONS],
+    ['MANAJEMEN_DATA', SKB_MANAJEMEN_DATA_QUESTIONS],
+    ['JARINGAN_DASAR', SKB_JARINGAN_QUESTIONS],
+  ];
+
+  const globalSlots: Record<'A' | 'B' | 'C' | 'D' | 'E', number> = { A: 0, B: 0, C: 0, D: 0, E: 0 };
+  const globalLevels: Record<'C4' | 'C5' | 'C6', number> = { C4: 0, C5: 0, C6: 0 };
+  let totalCodeStimuli = 0;
+
+  for (const [name, bank] of skbBanks) {
+    assertValidCategoryBank(name, bank, 50);
+    assert.equal(bank.length, 50, `${name} must contain exactly 50 SKB HOTS questions, got ${bank.length}`);
+
+    const catSlots: Record<'A' | 'B' | 'C' | 'D' | 'E', number> = { A: 0, B: 0, C: 0, D: 0, E: 0 };
+    const catLevels: Record<'C4' | 'C5' | 'C6', number> = { C4: 0, C5: 0, C6: 0 };
+    let catCodeStimuli = 0;
+
+    bank.forEach((q, idx) => {
+      const label = `SKB:${name}[${idx}] (${q.subtopik})`;
+      assert.equal(q.exam_type, 'SKB', `${label} exam_type must be SKB`);
+
+      const levelMatch = q.subtopik.match(/^\[(C4|C5|C6)\]\s+.+/);
+      assert.ok(levelMatch, `${label} subtopik must start with [C4], [C5], or [C6]`);
+      const lvl = levelMatch[1] as 'C4' | 'C5' | 'C6';
+      catLevels[lvl]++;
+      globalLevels[lvl]++;
+
+      catSlots[q.jawaban_benar]++;
+      globalSlots[q.jawaban_benar]++;
+
+      // Must be stimulus-based HOTS, not basic memorization/LOTS
+      assert.ok(
+        !/^\s*(apa kepanjangan|kepanjangan dari|singkatan dari|perintah sql untuk .+ adalah)/i.test(q.pertanyaan),
+        `${label} looks like a LOTS memorization question`
+      );
+      if (q.pertanyaan.includes('```')) {
+        catCodeStimuli++;
+        totalCodeStimuli++;
+      }
+
+      // Structured 3-part SKB HOTS explanation
+      assert.ok(q.pembahasan.includes('Akar Masalah:'), `${label} missing Akar Masalah:`);
+      assert.ok(q.pembahasan.includes('Solusi Terbaik:'), `${label} missing Solusi Terbaik:`);
+      assert.ok(q.pembahasan.includes('Analisis Opsi Pengecoh:'), `${label} missing Analisis Opsi Pengecoh:`);
+      assert.ok(
+        !/\b(opsi|pilihan|jawaban)\s+[A-E]\b/i.test(q.pembahasan),
+        `${label} pembahasan must not hardcode option letter (breaks under runtime shuffling)`
+      );
+
+      // Distractor quality: every option should be substantial (not cartoonishly tiny)
+      const optLens = [q.opsi_a, q.opsi_b, q.opsi_c, q.opsi_d, q.opsi_e].map((o) => o.trim().length);
+      assert.ok(
+        optLens.every((len) => len >= 40),
+        `${label} has overly short option (min length ${Math.min(...optLens)})`
+      );
+    });
+
+    for (const slot of ['A', 'B', 'C', 'D', 'E'] as const) {
+      assert.equal(
+        catSlots[slot],
+        10,
+        `${name} slot ${slot} must have exactly 10 correct answers, got ${catSlots[slot]}`
+      );
+    }
+
+    for (const lvl of ['C4', 'C5', 'C6'] as const) {
+      assert.ok(
+        catLevels[lvl] >= 8,
+        `${name} must have meaningful coverage of ${lvl} (got ${catLevels[lvl]})`
+      );
+    }
+
+    assert.ok(catCodeStimuli >= 2, `${name} should include technical code/log/schema stimuli`);
   }
+
+  assert.equal(SKB_QUESTIONS.length, 200);
+  for (const slot of ['A', 'B', 'C', 'D', 'E'] as const) {
+    assert.equal(globalSlots[slot], 40, `Global SKB slot ${slot} must be 40, got ${globalSlots[slot]}`);
+  }
+  assert.ok(totalCodeStimuli >= 45, `Expected broad code/SQL/log/schema stimuli across SKB, got ${totalCodeStimuli}`);
+  assert.equal(globalLevels.C4 + globalLevels.C5 + globalLevels.C6, 200);
 });
 
 test('Combined SKD + SKB HOTS bank has 1,460 globally unique questions', () => {

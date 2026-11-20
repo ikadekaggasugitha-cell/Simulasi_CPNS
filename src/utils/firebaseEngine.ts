@@ -15,8 +15,8 @@ import {
   getDoc,
   getDocs,
   query,
+  runTransaction,
   serverTimestamp,
-  setDoc,
   updateDoc,
   where,
   writeBatch,
@@ -234,7 +234,9 @@ function requireVerifiedFirebaseUser(): FirebaseUser {
   return user;
 }
 
-export async function ensureFirebaseUserProfile(
+const inFlightProfileSync = new Map<string, Promise<AuthUser>>();
+
+async function executeEnsureFirebaseUserProfile(
   fbUser: FirebaseUser,
   overrideName?: string
 ): Promise<AuthUser> {
@@ -242,50 +244,76 @@ export async function ensureFirebaseUserProfile(
   const finalName = overrideName
     ? sanitizeDisplayName(overrideName, baseUser.email)
     : baseUser.name;
+  const safeEmail = baseUser.email.slice(0, 200);
 
-  // Firestore rules strictly require email_verified == true for profile writes
-  if (!fbUser.emailVerified) {
-    return { ...baseUser, name: finalName };
+  // Firestore rules strictly require email_verified == true and valid email format for profile writes
+  if (!fbUser.emailVerified || !EMAIL_REGEX.test(safeEmail) || safeEmail.length < 5) {
+    return { ...baseUser, name: finalName, email: safeEmail };
   }
+
+  // Ensure the client auth token (with email_verified claim) is initialized before first Firestore write
+  await fbUser.getIdToken();
 
   const profilePath = `users/${fbUser.uid}`;
   const profileRef = doc(db, 'users', fbUser.uid);
 
   try {
-    const snap = await getDoc(profileRef);
-    if (!snap.exists()) {
-      await setDoc(profileRef, {
-        uid: fbUser.uid,
-        name: finalName,
-        email: baseUser.email,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      return { ...baseUser, name: finalName };
-    }
+    const resolvedName = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(profileRef);
+      if (!snap.exists()) {
+        tx.set(profileRef, {
+          uid: fbUser.uid,
+          name: finalName,
+          email: safeEmail,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        return finalName;
+      }
 
-    const data = snap.data() as { name?: string; email?: string };
-    const storedName =
-      typeof data.name === 'string' && data.name.trim().length >= 2
-        ? data.name.trim()
-        : finalName;
+      const data = snap.data() as { name?: string; email?: string };
+      const storedName =
+        typeof data.name === 'string' && data.name.trim().length >= 2
+          ? data.name.trim().slice(0, 120)
+          : finalName;
+      const nextName = overrideName ? finalName : storedName;
 
-    if (
-      (overrideName && finalName !== storedName) ||
-      (baseUser.email && data.email !== baseUser.email)
-    ) {
-      await updateDoc(profileRef, {
-        name: overrideName ? finalName : storedName,
-        email: baseUser.email,
-        updatedAt: serverTimestamp(),
-      });
-      return { ...baseUser, name: overrideName ? finalName : storedName };
-    }
+      if (nextName !== storedName || data.email !== safeEmail) {
+        tx.update(profileRef, {
+          name: nextName,
+          email: safeEmail,
+          updatedAt: serverTimestamp(),
+        });
+      }
 
-    return { ...baseUser, name: storedName };
+      return nextName;
+    });
+
+    return { ...baseUser, name: resolvedName, email: safeEmail };
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, profilePath);
   }
+}
+
+export function ensureFirebaseUserProfile(
+  fbUser: FirebaseUser,
+  overrideName?: string
+): Promise<AuthUser> {
+  const existing = inFlightProfileSync.get(fbUser.uid);
+  if (existing && !overrideName) {
+    return existing;
+  }
+
+  const run = (existing ? existing.catch(() => null) : Promise.resolve(null))
+    .then(() => executeEnsureFirebaseUserProfile(fbUser, overrideName))
+    .finally(() => {
+      if (inFlightProfileSync.get(fbUser.uid) === run) {
+        inFlightProfileSync.delete(fbUser.uid);
+      }
+    });
+
+  inFlightProfileSync.set(fbUser.uid, run);
+  return run;
 }
 
 export function subscribeFirebaseAuth(
