@@ -25,6 +25,7 @@ import {
   formatSessionModeLabel,
 } from '../utils/formatters';
 import { HintModal } from './HintModal';
+import { RichQuestionContent } from './RichQuestionContent';
 
 interface ResultViewProps {
   detail: SessionDetailResponse;
@@ -547,9 +548,9 @@ export const ResultView: React.FC<ResultViewProps> = ({
                       )}
                     </div>
 
-                    <p className="text-sm text-slate-800 leading-relaxed line-clamp-2">
-                      {item.pertanyaan}
-                    </p>
+                    <div className="text-sm text-slate-800 leading-relaxed">
+                      <RichQuestionContent content={item.pertanyaan} variant="compact" />
+                    </div>
 
                     <div className="flex flex-wrap items-center gap-4 text-xs font-mono tabular-nums text-slate-600">
                       <span>
@@ -603,6 +604,7 @@ export const ResultView: React.FC<ResultViewProps> = ({
         hint={modalHint}
         questionNumber={selectedEvaluationItem?.urutan}
         questionText={selectedEvaluationItem?.pertanyaan}
+        options={selectedEvaluationItem?.options}
         userSelectedLabel={selectedEvaluationItem?.selectedLabel}
         onClose={() => setSelectedEvaluationItem(null)}
       />

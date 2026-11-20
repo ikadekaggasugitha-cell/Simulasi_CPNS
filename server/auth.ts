@@ -15,8 +15,12 @@ export interface AuthTokenPayload {
   name: string;
 }
 
+export interface SqlAuthUser extends AuthUser {
+  id: number;
+}
+
 export interface AuthenticatedRequest extends Request {
-  authUser: AuthUser;
+  authUser: SqlAuthUser;
 }
 
 let cachedSecret: string | null = null;
@@ -50,7 +54,7 @@ export function getJwtSecret(): string {
   }
 }
 
-export function signAuthToken(user: AuthUser): string {
+export function signAuthToken(user: SqlAuthUser): string {
   const payload: AuthTokenPayload = {
     userId: user.id,
     email: user.email,
@@ -154,7 +158,7 @@ export function createRequireAuth(db: Database.Database) {
 
     const userRow = db
       .prepare('SELECT id, name, email, created_at FROM users WHERE id = ?')
-      .get(decoded.userId) as AuthUser | undefined;
+      .get(decoded.userId) as SqlAuthUser | undefined;
 
     if (!userRow) {
       res.status(401).json({

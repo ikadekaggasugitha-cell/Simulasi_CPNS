@@ -73,12 +73,132 @@ test('TWK bank has at least 385 unique valid HOTS questions', () => {
   assertValidCategoryBank('TWK', ALL_TWK, 385);
 });
 
-test('TIU bank has at least 500 unique valid HOTS questions', () => {
+test('TIU bank has 500 unique valid HOTS questions with Verbal/Numerik/Figural SVG & dual-method explanations', () => {
   assertValidCategoryBank('TIU', ALL_TIU, 500);
+  assert.equal(ALL_TIU.length, 500, 'TIU bank must contain exactly 500 questions');
+
+  let verbalCount = 0;
+  let numerikCount = 0;
+  let figuralCount = 0;
+
+  ALL_TIU.forEach((q, idx) => {
+    const label = `TIU[${idx}] (${q.subtopik})`;
+    assert.ok(
+      q.pembahasan.includes('Metode 1 (Langkah Sistematis):'),
+      `${label} missing Metode 1 (Langkah Sistematis)`
+    );
+    assert.ok(
+      q.pembahasan.includes('Metode 2 (Trik Cepat / Eliminasi):'),
+      `${label} missing Metode 2 (Trik Cepat / Eliminasi)`
+    );
+
+    if (q.subtopik.startsWith('Verbal')) {
+      verbalCount++;
+    } else if (q.subtopik.startsWith('Numerik')) {
+      numerikCount++;
+    } else if (q.subtopik.startsWith('Figural')) {
+      figuralCount++;
+      const combined = [q.pertanyaan, q.opsi_a, q.opsi_b, q.opsi_c, q.opsi_d, q.opsi_e].join('\n');
+      assert.ok(
+        combined.includes('<svg') && combined.includes('viewBox="0 0 100 100"'),
+        `${label} Figural question must contain inline <svg viewBox="0 0 100 100">`
+      );
+      const strippedXmlns = combined.replace(/xmlns="http:\/\/www\.w3\.org\/2000\/svg"/g, '');
+      assert.ok(
+        !/(https?:\/\/|<img\b|<image\b)/i.test(strippedXmlns),
+        `${label} Figural question must not reference external image URLs`
+      );
+      const optionSvgs = [q.opsi_a, q.opsi_b, q.opsi_c, q.opsi_d, q.opsi_e];
+      optionSvgs.forEach((opt, optIdx) => {
+        assert.ok(
+          opt.includes('<svg') && opt.includes('</svg>'),
+          `${label} option ${optIdx} must be valid inline SVG`
+        );
+      });
+    } else {
+      assert.fail(`${label} has unrecognized TIU subtopik prefix: ${q.subtopik}`);
+    }
+  });
+
+  assert.equal(verbalCount, 150, `Expected 150 TIU Verbal questions, got ${verbalCount}`);
+  assert.equal(numerikCount, 215, `Expected 215 TIU Numerik questions, got ${numerikCount}`);
+  assert.equal(figuralCount, 135, `Expected 135 TIU Figural SVG questions, got ${figuralCount}`);
 });
 
-test('TKP bank has at least 375 unique valid HOTS questions with 1-5 weights', () => {
+test('TKP bank has 375 unique valid HOTS situational questions evenly split across 5 aspects with balanced A-E score-5 slots', () => {
   assertValidCategoryBank('TKP', ALL_TKP, 375);
+  assert.equal(ALL_TKP.length, 375, 'TKP bank must contain exactly 375 questions');
+
+  const expectedAspects = [
+    'Pelayanan Publik',
+    'Profesionalisme',
+    'Jejaring Kerja & Sosial Budaya',
+    'Teknologi Informasi dan Komunikasi (TIK)',
+    'Antiradikalisme',
+  ] as const;
+
+  const aspectCounts: Record<string, number> = {};
+  const globalBestSlotCounts: Record<'A' | 'B' | 'C' | 'D' | 'E', number> = {
+    A: 0,
+    B: 0,
+    C: 0,
+    D: 0,
+    E: 0,
+  };
+  const perAspectBestSlotCounts: Record<string, Record<'A' | 'B' | 'C' | 'D' | 'E', number>> = {};
+
+  ALL_TKP.forEach((q, idx) => {
+    const label = `TKP[${idx}] (${q.subtopik})`;
+    aspectCounts[q.subtopik] = (aspectCounts[q.subtopik] ?? 0) + 1;
+    globalBestSlotCounts[q.jawaban_benar]++;
+
+    if (!perAspectBestSlotCounts[q.subtopik]) {
+      perAspectBestSlotCounts[q.subtopik] = { A: 0, B: 0, C: 0, D: 0, E: 0 };
+    }
+    perAspectBestSlotCounts[q.subtopik][q.jawaban_benar]++;
+
+    assert.ok(
+      q.pembahasan.includes('Skor 5 (Paling Ideal):'),
+      `${label} missing Skor 5 (Paling Ideal) breakdown`
+    );
+    assert.ok(
+      q.pembahasan.includes('Skor 4 (Sedikit di Bawahnya):'),
+      `${label} missing Skor 4 (Sedikit di Bawahnya) breakdown`
+    );
+    assert.ok(
+      q.pembahasan.includes('Gradasi Skor 3–1:'),
+      `${label} missing Gradasi Skor 3–1 breakdown`
+    );
+  });
+
+  assert.equal(
+    Object.keys(aspectCounts).length,
+    expectedAspects.length,
+    `Expected exactly 5 TKP aspects, got: ${Object.keys(aspectCounts).join(', ')}`
+  );
+
+  for (const aspect of expectedAspects) {
+    assert.equal(
+      aspectCounts[aspect],
+      75,
+      `Aspect "${aspect}" must have exactly 75 questions, got ${aspectCounts[aspect] ?? 0}`
+    );
+    for (const slot of ['A', 'B', 'C', 'D', 'E'] as const) {
+      assert.equal(
+        perAspectBestSlotCounts[aspect][slot],
+        15,
+        `Aspect "${aspect}" slot ${slot} must have 15 score-5 answers, got ${perAspectBestSlotCounts[aspect][slot]}`
+      );
+    }
+  }
+
+  for (const slot of ['A', 'B', 'C', 'D', 'E'] as const) {
+    assert.equal(
+      globalBestSlotCounts[slot],
+      75,
+      `Global TKP slot ${slot} must have 75 score-5 answers, got ${globalBestSlotCounts[slot]}`
+    );
+  }
 });
 
 test('SKB IT banks each have 50 unique valid HOTS questions (200 total)', () => {

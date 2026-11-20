@@ -5,7 +5,8 @@ import {
   useExamContext,
 } from './context/ExamContext';
 import { AppShell } from './components/AppShell';
-import { AuthView } from './components/AuthView';
+import { AuthView, EmailVerificationGate } from './components/AuthView';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { PortalLandingView } from './components/PortalLandingView';
 import { SkdDashboardView } from './components/SkdDashboardView';
 import { SkbDashboardView } from './components/SkbDashboardView';
@@ -41,6 +42,11 @@ const AppRouter: React.FC = () => {
   // Public Auth Routes (/login & /register) + strict redirect guard if unauthenticated
   if (!currentUser) {
     return <AuthView mode={route.kind === 'register' ? 'register' : 'login'} />;
+  }
+
+  // Email/Password Firebase accounts must verify email before accessing Firestore
+  if (currentUser.emailVerified === false) {
+    return <EmailVerificationGate />;
   }
 
   if (isPublicAuthRoute(route)) {
@@ -115,8 +121,10 @@ const AppRouter: React.FC = () => {
 
 export default function App() {
   return (
-    <ExamProvider>
-      <AppRouter />
-    </ExamProvider>
+    <ErrorBoundary>
+      <ExamProvider>
+        <AppRouter />
+      </ExamProvider>
+    </ErrorBoundary>
   );
 }

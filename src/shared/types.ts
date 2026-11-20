@@ -144,10 +144,11 @@ export interface CreateSkbSessionPayload {
 }
 
 export interface AuthUser {
-  id: number;
+  id: number | string;
   name: string;
   email: string;
   created_at: string;
+  emailVerified?: boolean;
 }
 
 export interface LoginPayload {

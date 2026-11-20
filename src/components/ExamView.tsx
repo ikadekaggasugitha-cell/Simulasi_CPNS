@@ -27,6 +27,7 @@ import {
   formatSessionModeLabel,
 } from '../utils/formatters';
 import { HintModal } from './HintModal';
+import { RichQuestionContent, containsSvgMarkup } from './RichQuestionContent';
 
 interface ExamViewProps {
   detail: SessionDetailResponse;
@@ -429,50 +430,74 @@ export const ExamView: React.FC<ExamViewProps> = ({
               )}
             </div>
 
-            <div className="text-base leading-relaxed text-slate-900 whitespace-pre-line">
-              {currentItem.pertanyaan}
+            <div className="text-base leading-relaxed text-slate-900">
+              <RichQuestionContent content={currentItem.pertanyaan} variant="prompt" />
             </div>
 
-            <div
-              role="radiogroup"
-              aria-label={`Pilihan jawaban soal nomor ${currentItem.urutan}`}
-              className="space-y-3"
-            >
-              {currentItem.options.map((opt) => {
-                const selected = currentItem.selectedLabel === opt.label;
-                return (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => handleSelectOption(opt.label)}
-                    className={`flex w-full items-start gap-3.5 rounded-lg border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 ${
-                      selected
-                        ? isSkb
-                          ? 'border-emerald-700 bg-emerald-50/70 ring-1 ring-emerald-700'
-                          : 'border-blue-800 bg-blue-50/80 ring-1 ring-blue-800'
-                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <span
-                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border font-mono text-xs font-bold ${
-                        selected
-                          ? isSkb
-                            ? 'border-emerald-700 bg-emerald-700 text-white'
-                            : 'border-blue-900 bg-blue-900 text-white'
-                          : 'border-slate-300 bg-slate-50 text-slate-700'
-                      }`}
-                    >
-                      {opt.label}
-                    </span>
-                    <span className="text-sm sm:text-base leading-relaxed text-slate-800 pt-0.5">
-                      {opt.text}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            {(() => {
+              const hasSvgOptions = currentItem.options.some((opt) =>
+                containsSvgMarkup(opt.text)
+              );
+              return (
+                <div
+                  role="radiogroup"
+                  aria-label={`Pilihan jawaban soal nomor ${currentItem.urutan}`}
+                  className={
+                    hasSvgOptions
+                      ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3'
+                      : 'space-y-3'
+                  }
+                >
+                  {currentItem.options.map((opt) => {
+                    const selected = currentItem.selectedLabel === opt.label;
+                    return (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => handleSelectOption(opt.label)}
+                        className={`${
+                          hasSvgOptions
+                            ? 'flex flex-col items-center justify-center gap-2.5 p-3.5 text-center'
+                            : 'flex w-full items-start gap-3.5 p-4 text-left'
+                        } rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 ${
+                          selected
+                            ? isSkb
+                              ? 'border-emerald-700 bg-emerald-50/70 ring-1 ring-emerald-700'
+                              : 'border-blue-800 bg-blue-50/80 ring-1 ring-blue-800'
+                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border font-mono text-xs font-bold ${
+                            selected
+                              ? isSkb
+                                ? 'border-emerald-700 bg-emerald-700 text-white'
+                                : 'border-blue-900 bg-blue-900 text-white'
+                              : 'border-slate-300 bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          {opt.label}
+                        </span>
+                        <div
+                          className={
+                            hasSvgOptions
+                              ? 'w-full flex justify-center'
+                              : 'text-sm sm:text-base leading-relaxed text-slate-800 pt-0.5'
+                          }
+                        >
+                          <RichQuestionContent
+                            content={opt.text}
+                            variant={hasSvgOptions ? 'option' : 'prompt'}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-5">
               <button
@@ -746,6 +771,8 @@ export const ExamView: React.FC<ExamViewProps> = ({
           hint={hintData}
           questionNumber={currentItem.urutan}
           questionText={currentItem.pertanyaan}
+          options={currentItem.options}
+          userSelectedLabel={currentItem.selectedLabel}
           onClose={() => setHintOpen(false)}
         />
       )}

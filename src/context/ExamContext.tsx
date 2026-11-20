@@ -28,9 +28,14 @@ import {
   fetchHealth,
   fetchSessionDetail,
   fetchSessions,
+  isFirebaseStorageMode,
   loginAccount,
+  loginWithGoogleAccount,
   logoutAccount,
   registerAccount,
+  reloadFirebaseUserAccount,
+  resendVerificationEmail,
+  subscribeFirebaseAuth,
 } from '../utils/api';
 
 export type AppRoute =
@@ -101,6 +106,31 @@ export function routeToPath(route: AppRoute): string {
   }
 }
 
+function formatUserFacingError(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    return err.message;
+  }
+  if (err instanceof Error) {
+    try {
+      const parsed = JSON.parse(err.message) as {
+        error?: string;
+        operationType?: string;
+      };
+      if (parsed && typeof parsed.error === 'string') {
+        const lower = parsed.error.toLowerCase();
+        if (lower.includes('permission') || lower.includes('insufficient')) {
+          return 'Akses ditolak: Anda tidak memiliki izin mengakses data tersebut atau sesi milik pengguna lain.';
+        }
+        return parsed.error;
+      }
+    } catch {
+      // Not a structured JSON error
+    }
+    return err.message;
+  }
+  return fallback;
+}
+
 interface NavigateOptions {
   bankExamType?: ExamType;
   setupMode?: SessionMode;
@@ -111,11 +141,15 @@ interface NavigateOptions {
 interface ExamContextValue {
   route: AppRoute;
   navigate: (path: string, options?: NavigateOptions) => void;
+  usingFirebase: boolean;
   currentUser: AuthUser | null;
   authChecked: boolean;
   authSubmitting: boolean;
   login: (payload: LoginPayload) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   register: (payload: RegisterPayload) => Promise<void>;
+  resendVerification: () => Promise<void>;
+  reloadVerification: () => Promise<boolean>;
   logout: () => Promise<void>;
   bankStats: QuestionBankStats | null;
   categories: CategoryMeta[];
@@ -143,6 +177,7 @@ interface ExamContextValue {
 const ExamContext = createContext<ExamContextValue | null>(null);
 
 export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const usingFirebase = isFirebaseStorageMode();
   const [route, setRoute] = useState<AppRoute>(() =>
     parseRoute(window.location.pathname)
   );
@@ -218,16 +253,13 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
         handleUnauthorized();
         return;
       }
-      setError(
-        err instanceof Error ? err.message : 'Gagal memuat riwayat sesi pengguna.'
-      );
+      setError(formatUserFacingError(err, 'Gagal memuat riwayat sesi pengguna.'));
     } finally {
       setLoading(false);
     }
   }, [handleUnauthorized]);
 
-  const refreshAll = useCallback(async () => {
-    setLoading(true);
+  const loadBankStats = useCallback(async () => {
     try {
       const healthRes = await fetchHealth();
       setBankStats(healthRes.bankStats);
@@ -235,42 +267,90 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // ignore health probe error when offline
     }
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    setLoading(true);
+    await loadBankStats();
+
+    if (usingFirebase) {
+      if (currentUser && currentUser.emailVerified !== false) {
+        await loadProtectedData();
+      } else {
+        setLoading(false);
+      }
+      return;
+    }
 
     try {
       const meRes = await fetchCurrentUser();
       setCurrentUser(meRes.user);
       setAuthChecked(true);
       await loadProtectedData();
-    } catch (err) {
+    } catch {
       setCurrentUser(null);
       setSkdSessions([]);
       setSkbSessions([]);
       setActiveDetail(null);
       setAuthChecked(true);
       setLoading(false);
-      if (!(err instanceof ApiError && err.status === 401)) {
-        // Non-401 startup error stays recoverable
-      }
     }
-  }, [loadProtectedData]);
+  }, [usingFirebase, currentUser, loadBankStats, loadProtectedData]);
 
+  // Initial startup: subscribe to persistent Firebase Auth state, or bootstrap local/remote auth
   useEffect(() => {
-    void refreshAll();
-  }, [refreshAll]);
+    void loadBankStats();
+
+    if (usingFirebase) {
+      const unsubscribe = subscribeFirebaseAuth((fbUser) => {
+        setCurrentUser(fbUser);
+        setAuthChecked(true);
+        if (fbUser && fbUser.emailVerified !== false) {
+          void loadProtectedData();
+        } else {
+          setSkdSessions([]);
+          setSkbSessions([]);
+          setActiveDetail(null);
+          setLoading(false);
+        }
+      });
+      return () => unsubscribe();
+    }
+
+    void (async () => {
+      try {
+        const meRes = await fetchCurrentUser();
+        setCurrentUser(meRes.user);
+        setAuthChecked(true);
+        await loadProtectedData();
+      } catch {
+        setCurrentUser(null);
+        setSkdSessions([]);
+        setSkbSessions([]);
+        setActiveDetail(null);
+        setAuthChecked(true);
+        setLoading(false);
+      }
+    })();
+  }, [usingFirebase, loadBankStats, loadProtectedData]);
 
   // Route Guard: Protect all app routes except /login and /register
   useEffect(() => {
     if (!authChecked) return;
     if (!currentUser && !isPublicAuthRoute(route)) {
       navigate('/login', { replace: true, preserveError: true });
-    } else if (currentUser && isPublicAuthRoute(route)) {
+    } else if (
+      currentUser &&
+      currentUser.emailVerified !== false &&
+      isPublicAuthRoute(route)
+    ) {
       navigate('/', { replace: true });
     }
   }, [authChecked, currentUser, route, navigate]);
 
   const refreshSessionsByType = useCallback(
     async (examType: ExamType) => {
-      if (!currentUser) return;
+      if (!currentUser || currentUser.emailVerified === false) return;
       try {
         const res = await fetchSessions(examType);
         if (examType === 'SKD') setSkdSessions(res.sessions);
@@ -284,6 +364,25 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [currentUser, handleUnauthorized]
   );
 
+  const loginWithGoogle = useCallback(async () => {
+    if (authSubmitting) return;
+    setAuthSubmitting(true);
+    setError(null);
+    try {
+      const res = await loginWithGoogleAccount();
+      setCurrentUser(res.user);
+      setActiveDetail(null);
+      if (res.user.emailVerified !== false) {
+        await loadProtectedData();
+        navigate('/', { replace: true });
+      }
+    } catch (err) {
+      setError(formatUserFacingError(err, 'Gagal masuk dengan akun Google.'));
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }, [authSubmitting, loadProtectedData, navigate]);
+
   const login = useCallback(
     async (payload: LoginPayload) => {
       if (authSubmitting) return;
@@ -293,10 +392,12 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const res = await loginAccount(payload);
         setCurrentUser(res.user);
         setActiveDetail(null);
-        await loadProtectedData();
-        navigate('/', { replace: true });
+        if (res.user.emailVerified !== false) {
+          await loadProtectedData();
+          navigate('/', { replace: true });
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Gagal masuk ke akun.');
+        setError(formatUserFacingError(err, 'Gagal masuk ke akun.'));
       } finally {
         setAuthSubmitting(false);
       }
@@ -313,16 +414,47 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const res = await registerAccount(payload);
         setCurrentUser(res.user);
         setActiveDetail(null);
-        await loadProtectedData();
-        navigate('/', { replace: true });
+        if (res.user.emailVerified !== false) {
+          await loadProtectedData();
+          navigate('/', { replace: true });
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Gagal mendaftarkan akun.');
+        setError(formatUserFacingError(err, 'Gagal mendaftarkan akun.'));
       } finally {
         setAuthSubmitting(false);
       }
     },
     [authSubmitting, loadProtectedData, navigate]
   );
+
+  const resendVerification = useCallback(async () => {
+    setError(null);
+    try {
+      await resendVerificationEmail();
+    } catch (err) {
+      setError(formatUserFacingError(err, 'Gagal mengirim ulang email verifikasi.'));
+      throw err;
+    }
+  }, []);
+
+  const reloadVerification = useCallback(async (): Promise<boolean> => {
+    setError(null);
+    try {
+      const updated = await reloadFirebaseUserAccount();
+      if (updated) {
+        setCurrentUser(updated);
+        if (updated.emailVerified !== false) {
+          await loadProtectedData();
+          navigate('/', { replace: true });
+          return true;
+        }
+      }
+      return false;
+    } catch (err) {
+      setError(formatUserFacingError(err, 'Gagal memeriksa status verifikasi email.'));
+      return false;
+    }
+  }, [loadProtectedData, navigate]);
 
   const logout = useCallback(async () => {
     try {
@@ -340,7 +472,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Synchronize activeDetail if URL points directly to /exam/:id or /result/:id
   useEffect(() => {
-    if (!authChecked || !currentUser) return;
+    if (!authChecked || !currentUser || currentUser.emailVerified === false) return;
     if (route.kind !== 'exam' && route.kind !== 'result') return;
     if (activeDetail && activeDetail.session.id === route.sessionId) {
       if (route.kind === 'exam' && activeDetail.session.status === 'COMPLETED') {
@@ -365,7 +497,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
           handleUnauthorized();
           return;
         }
-        setError(err instanceof Error ? err.message : 'Sesi ujian tidak ditemukan.');
+        setError(formatUserFacingError(err, 'Sesi ujian tidak ditemukan.'));
         navigate('/', { replace: true, preserveError: true });
       })
       .finally(() => {
@@ -379,7 +511,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const startSkdSimulation = useCallback(
     async (payload: CreateSkdSessionPayload) => {
-      if (creating || !currentUser) return;
+      if (creating || !currentUser || currentUser.emailVerified === false) return;
       setCreating(true);
       setError(null);
       try {
@@ -392,7 +524,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
           handleUnauthorized();
           return;
         }
-        setError(err instanceof Error ? err.message : 'Gagal membuat sesi ujian SKD.');
+        setError(formatUserFacingError(err, 'Gagal membuat sesi ujian SKD.'));
       } finally {
         setCreating(false);
       }
@@ -402,7 +534,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const startSkbSimulation = useCallback(
     async (payload: CreateSkbSessionPayload) => {
-      if (creating || !currentUser) return;
+      if (creating || !currentUser || currentUser.emailVerified === false) return;
       setCreating(true);
       setError(null);
       try {
@@ -415,7 +547,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
           handleUnauthorized();
           return;
         }
-        setError(err instanceof Error ? err.message : 'Gagal membuat sesi ujian SKB.');
+        setError(formatUserFacingError(err, 'Gagal membuat sesi ujian SKB.'));
       } finally {
         setCreating(false);
       }
@@ -439,7 +571,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
           handleUnauthorized();
           return;
         }
-        setError(err instanceof Error ? err.message : 'Gagal membuka detail sesi.');
+        setError(formatUserFacingError(err, 'Gagal membuka detail sesi.'));
       }
     },
     [navigate, handleUnauthorized]
@@ -459,7 +591,7 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
           handleUnauthorized();
           return;
         }
-        setError(err instanceof Error ? err.message : 'Gagal menghapus sesi ujian.');
+        setError(formatUserFacingError(err, 'Gagal menghapus sesi ujian.'));
       }
     },
     [handleUnauthorized]
@@ -478,11 +610,15 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     () => ({
       route,
       navigate,
+      usingFirebase,
       currentUser,
       authChecked,
       authSubmitting,
       login,
+      loginWithGoogle,
       register,
+      resendVerification,
+      reloadVerification,
       logout,
       bankStats,
       categories,
@@ -509,11 +645,15 @@ export const ExamProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [
       route,
       navigate,
+      usingFirebase,
       currentUser,
       authChecked,
       authSubmitting,
       login,
+      loginWithGoogle,
       register,
+      resendVerification,
+      reloadVerification,
       logout,
       bankStats,
       categories,

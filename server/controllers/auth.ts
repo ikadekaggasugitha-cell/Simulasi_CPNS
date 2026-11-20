@@ -1,12 +1,15 @@
 import bcrypt from 'bcryptjs';
 import type Database from 'better-sqlite3';
-import { signAuthToken } from '../auth';
+import { signAuthToken, type SqlAuthUser } from '../auth';
 import type {
-  AuthResponse,
-  AuthUser,
   LoginPayload,
   RegisterPayload,
 } from '../../src/shared/types';
+
+export interface SqlAuthResponse {
+  user: SqlAuthUser;
+  token: string;
+}
 
 interface DbUserRow {
   id: number;
@@ -19,7 +22,7 @@ interface DbUserRow {
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const BCRYPT_ROUNDS = 10;
 
-function sanitizeUser(row: Pick<DbUserRow, 'id' | 'name' | 'email' | 'created_at'>): AuthUser {
+function sanitizeUser(row: Pick<DbUserRow, 'id' | 'name' | 'email' | 'created_at'>): SqlAuthUser {
   return {
     id: row.id,
     name: row.name,
@@ -31,7 +34,7 @@ function sanitizeUser(row: Pick<DbUserRow, 'id' | 'name' | 'email' | 'created_at
 export async function registerUser(
   db: Database.Database,
   payload: Partial<RegisterPayload>
-): Promise<{ status: number; data?: AuthResponse; error?: string }> {
+): Promise<{ status: number; data?: SqlAuthResponse; error?: string }> {
   const name = typeof payload.name === 'string' ? payload.name.trim() : '';
   const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
   const password = typeof payload.password === 'string' ? payload.password : '';
@@ -66,7 +69,7 @@ export async function registerUser(
     )
     .run(name, email, passwordHash, createdAt);
 
-  const user: AuthUser = {
+  const user: SqlAuthUser = {
     id: Number(info.lastInsertRowid),
     name,
     email,
@@ -80,7 +83,7 @@ export async function registerUser(
 export async function loginUser(
   db: Database.Database,
   payload: Partial<LoginPayload>
-): Promise<{ status: number; data?: AuthResponse; error?: string }> {
+): Promise<{ status: number; data?: SqlAuthResponse; error?: string }> {
   const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
   const password = typeof payload.password === 'string' ? payload.password : '';
 

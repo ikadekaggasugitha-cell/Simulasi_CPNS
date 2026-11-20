@@ -216,7 +216,7 @@ function saveAuthSession(auth: StoredAuthSession | null): void {
   writeJson(KEY_AUTH, auth);
 }
 
-function requireLocalUser(): AuthUser {
+function requireLocalUser(): AuthUser & { id: number } {
   const auth = getAuthSession();
   if (!auth) {
     throw new ApiError(401, 'Autentikasi diperlukan. Silakan login terlebih dahulu.');

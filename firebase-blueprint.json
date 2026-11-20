@@ -1,0 +1,290 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Profil akun peserta simulasi CAT CPNS yang menyimpan identitas pribadi terisolasi per pemilik akun.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID pemilik akun."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120,
+          "description": "Nama lengkap peserta."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 200,
+          "description": "Alamat email terverifikasi pemilik akun (PII terisolasi)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp saat profil dibuat (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp saat profil terakhir diperbarui."
+        }
+      },
+      "required": ["uid", "name", "email", "createdAt", "updatedAt"]
+    },
+    "ExamSession": {
+      "title": "ExamSession",
+      "description": "Sesi simulasi CAT CPNS (SKD atau SKB) milik seorang peserta yang terisolasi ketat berdasarkan userId.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "ID numerik sesi untuk rute /exam/:id dan /result/:id."
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID pemilik sesi (immutable)."
+        },
+        "exam_type": {
+          "type": "string",
+          "enum": ["SKD", "SKB"],
+          "description": "Jenis modul ujian."
+        },
+        "session_mode": {
+          "type": "string",
+          "enum": ["REAL", "PRACTICE"],
+          "description": "Mode pengerjaan ujian."
+        },
+        "session_number": {
+          "type": "number",
+          "description": "Nomor urut sesi pada modul terkait."
+        },
+        "nama_sesi": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "description": "Nama label sesi ujian."
+        },
+        "mode_waktu": {
+          "type": "string",
+          "enum": ["TIMED", "UNTIMED"],
+          "description": "Mode timer sesi."
+        },
+        "paket_soal": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "description": "Kode paket soal."
+        },
+        "jumlah_per_kategori": {
+          "type": "number",
+          "description": "Rata-rata jumlah soal per kategori."
+        },
+        "total_soal": {
+          "type": "number",
+          "description": "Total butir soal dalam sesi."
+        },
+        "batas_waktu_detik": {
+          "type": "number",
+          "description": "Batas waktu dalam detik (atau null untuk UNTIMED)."
+        },
+        "durasi_pengerjaan_detik": {
+          "type": "number",
+          "description": "Durasi pengerjaan aktual dalam detik."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["IN_PROGRESS", "COMPLETED"],
+          "description": "Status siklus hidup sesi (COMPLETED bersifat terminal)."
+        },
+        "skor_twk": {
+          "type": "number",
+          "description": "Skor TWK."
+        },
+        "skor_tiu": {
+          "type": "number",
+          "description": "Skor TIU."
+        },
+        "skor_tkp": {
+          "type": "number",
+          "description": "Skor TKP."
+        },
+        "skor_total": {
+          "type": "number",
+          "description": "Skor total sesi."
+        },
+        "skor_maksimal": {
+          "type": "number",
+          "description": "Skor maksimal sesi."
+        },
+        "persentase_total": {
+          "type": "number",
+          "description": "Persentase penguasaan total."
+        },
+        "lulus_passing_grade": {
+          "type": "boolean",
+          "description": "Status kelulusan Passing Grade BKN."
+        },
+        "breakdown_skor": {
+          "type": "array",
+          "description": "Daftar ringkasan skor per kategori (maksimal 7 elemen)."
+        },
+        "topik_rekomendasi": {
+          "type": "array",
+          "description": "Daftar topik rekomendasi belajar prioritas (maksimal 10 elemen)."
+        },
+        "created_at": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 40,
+          "description": "Timestamp ISO pembuatan sesi untuk tampilan UI."
+        },
+        "completed_at": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Timestamp ISO penyelesaian sesi atau null saat IN_PROGRESS."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp pembuatan dokumen (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp pembaruan terakhir dokumen."
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "exam_type",
+        "session_mode",
+        "session_number",
+        "nama_sesi",
+        "mode_waktu",
+        "paket_soal",
+        "jumlah_per_kategori",
+        "total_soal",
+        "batas_waktu_detik",
+        "durasi_pengerjaan_detik",
+        "status",
+        "skor_twk",
+        "skor_tiu",
+        "skor_tkp",
+        "skor_total",
+        "skor_maksimal",
+        "persentase_total",
+        "lulus_passing_grade",
+        "breakdown_skor",
+        "topik_rekomendasi",
+        "created_at",
+        "completed_at",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SessionAnswer": {
+      "title": "SessionAnswer",
+      "description": "Butir jawaban teracak milik satu sesi ujian pada subkoleksi answers.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "ID numerik lokal butir jawaban dalam sesi."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "ID dokumen sesi induk (immutable)."
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID pemilik sesi (immutable)."
+        },
+        "question_id": {
+          "type": "number",
+          "description": "ID soal dari katalog global."
+        },
+        "urutan": {
+          "type": "number",
+          "description": "Nomor urut soal pada lembar ujian."
+        },
+        "opsi_order": {
+          "type": "array",
+          "description": "Urutan pengacakan 5 opsi (A-E)."
+        },
+        "jawaban_user": {
+          "type": "string",
+          "enum": ["A", "B", "C", "D", "E"],
+          "description": "Kunci opsi asli pilihan peserta atau null jika kosong."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["BENAR", "SALAH", "KOSONG"],
+          "description": "Status penilaian butir jawaban."
+        },
+        "poin": {
+          "type": "number",
+          "description": "Poin yang diperoleh (0-5)."
+        },
+        "ditandai": {
+          "type": "boolean",
+          "description": "Penanda ragu-ragu pada butir soal."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp pembuatan dokumen."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp pembaruan terakhir dokumen."
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "userId",
+        "question_id",
+        "urutan",
+        "opsi_order",
+        "jawaban_user",
+        "status",
+        "poin",
+        "ditandai",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Profil pengguna terisolasi berdasarkan Firebase Auth UID."
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ExamSession" },
+      "description": "Sesi simulasi SKD dan SKB milik masing-masing peserta."
+    },
+    "/sessions/{sessionId}/answers/{answerId}": {
+      "schema": { "$ref": "#/entities/SessionAnswer" },
+      "description": "Jawaban tiap butir soal dalam suatu sesi ujian, dilindungi Master Gate terhadap dokumen sesi induk."
+    }
+  }
+}

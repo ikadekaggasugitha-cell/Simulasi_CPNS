@@ -1,0 +1,279 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global Default-Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // === Global Hardened Primitives ===
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidOptionKey(val) {
+      return val is string && val in ['A', 'B', 'C', 'D', 'E'];
+    }
+
+    // === Entity Validation Blueprints (Anti-Update-Gap) ===
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'name', 'email', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.uid == userId
+        && data.name is string
+        && data.name.size() >= 2
+        && data.name.size() <= 120
+        && data.email is string
+        && data.email.size() >= 5
+        && data.email.size() <= 200
+        && data.email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBreakdownList(listVal) {
+      return listVal is list
+        && listVal.size() <= 7
+        && (listVal.size() == 0 || listVal[0] is map);
+    }
+
+    function isValidTopicList(listVal) {
+      return listVal is list
+        && listVal.size() <= 10
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 120));
+    }
+
+    function isValidExamSession(data) {
+      return data.keys().hasAll([
+        'id', 'userId', 'exam_type', 'session_mode', 'session_number', 'nama_sesi',
+        'mode_waktu', 'paket_soal', 'jumlah_per_kategori', 'total_soal',
+        'batas_waktu_detik', 'durasi_pengerjaan_detik', 'status',
+        'skor_twk', 'skor_tiu', 'skor_tkp', 'skor_total', 'skor_maksimal',
+        'persentase_total', 'lulus_passing_grade', 'breakdown_skor',
+        'topik_rekomendasi', 'created_at', 'completed_at', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'userId', 'exam_type', 'session_mode', 'session_number', 'nama_sesi',
+        'mode_waktu', 'paket_soal', 'jumlah_per_kategori', 'total_soal',
+        'batas_waktu_detik', 'durasi_pengerjaan_detik', 'status',
+        'skor_twk', 'skor_tiu', 'skor_tkp', 'skor_total', 'skor_maksimal',
+        'persentase_total', 'lulus_passing_grade', 'breakdown_skor',
+        'topik_rekomendasi', 'created_at', 'completed_at', 'createdAt', 'updatedAt'
+      ])
+      && data.id is int && data.id >= 1
+      && data.userId is string && isValidId(data.userId) && data.userId == request.auth.uid
+      && data.exam_type is string && data.exam_type in ['SKD', 'SKB']
+      && data.session_mode is string && data.session_mode in ['REAL', 'PRACTICE']
+      && data.session_number is int && data.session_number >= 1 && data.session_number <= 100000
+      && data.nama_sesi is string && data.nama_sesi.size() >= 3 && data.nama_sesi.size() <= 120
+      && data.mode_waktu is string && data.mode_waktu in ['TIMED', 'UNTIMED']
+      && data.paket_soal is string && data.paket_soal.size() >= 3 && data.paket_soal.size() <= 64
+      && data.jumlah_per_kategori is int && data.jumlah_per_kategori >= 1 && data.jumlah_per_kategori <= 200
+      && data.total_soal is int && data.total_soal >= 1 && data.total_soal <= 200
+      && (data.batas_waktu_detik == null || (data.batas_waktu_detik is int && data.batas_waktu_detik >= 60 && data.batas_waktu_detik <= 14400))
+      && data.durasi_pengerjaan_detik is int && data.durasi_pengerjaan_detik >= 0 && data.durasi_pengerjaan_detik <= 86400
+      && data.status is string && data.status in ['IN_PROGRESS', 'COMPLETED']
+      && data.skor_twk is int && data.skor_twk >= 0 && data.skor_twk <= 1000
+      && data.skor_tiu is int && data.skor_tiu >= 0 && data.skor_tiu <= 1000
+      && data.skor_tkp is int && data.skor_tkp >= 0 && data.skor_tkp <= 1000
+      && data.skor_total is int && data.skor_total >= 0 && data.skor_total <= 2000
+      && data.skor_maksimal is int && data.skor_maksimal >= 0 && data.skor_maksimal <= 2000
+      && data.persentase_total is number && data.persentase_total >= 0 && data.persentase_total <= 100
+      && data.lulus_passing_grade is bool
+      && isValidBreakdownList(data.breakdown_skor)
+      && isValidTopicList(data.topik_rekomendasi)
+      && data.created_at is string && data.created_at.size() >= 10 && data.created_at.size() <= 40
+      && (data.completed_at == null || (data.completed_at is string && data.completed_at.size() >= 10 && data.completed_at.size() <= 40))
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidOpsiOrder(orderVal) {
+      return orderVal is list
+        && orderVal.size() == 5
+        && orderVal.hasOnly(['A', 'B', 'C', 'D', 'E'])
+        && orderVal[0] is string;
+    }
+
+    function isValidSessionAnswer(data, sessionId) {
+      return data.keys().hasAll([
+        'id', 'sessionId', 'userId', 'question_id', 'urutan', 'opsi_order',
+        'jawaban_user', 'status', 'poin', 'ditandai', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'sessionId', 'userId', 'question_id', 'urutan', 'opsi_order',
+        'jawaban_user', 'status', 'poin', 'ditandai', 'createdAt', 'updatedAt'
+      ])
+      && data.id is int && data.id >= 1
+      && data.sessionId is string && isValidId(data.sessionId) && data.sessionId == sessionId
+      && data.userId is string && isValidId(data.userId) && data.userId == request.auth.uid
+      && data.question_id is int && data.question_id >= 1 && data.question_id <= 100000
+      && data.urutan is int && data.urutan >= 1 && data.urutan <= 200
+      && isValidOpsiOrder(data.opsi_order)
+      && (data.jawaban_user == null || isValidOptionKey(data.jawaban_user))
+      && data.status is string && data.status in ['BENAR', 'SALAH', 'KOSONG']
+      && data.poin is int && data.poin >= 0 && data.poin <= 5
+      && data.ditandai is bool
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    // === Collection: /users/{userId} (Strict PII Isolation) ===
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'updatedAt']);
+
+      allow delete: if isVerifiedUser() && isValidId(userId) && isOwner(userId);
+    }
+
+    // === Collection: /sessions/{sessionId} (Strict Multi-User Isolation + Terminal State Locking) ===
+    match /sessions/{sessionId} {
+      allow get: if isSignedIn()
+        && isValidId(sessionId)
+        && existing().userId == request.auth.uid;
+
+      allow list: if isSignedIn()
+        && existing().userId == request.auth.uid;
+
+      allow create: if isVerifiedUser()
+        && isValidId(sessionId)
+        && isValidExamSession(incoming())
+        && incoming().status == 'IN_PROGRESS'
+        && incoming().completed_at == null
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+
+      allow update: if isVerifiedUser()
+        && isValidId(sessionId)
+        && isValidExamSession(incoming())
+        && existing().userId == request.auth.uid
+        && existing().status == 'IN_PROGRESS'
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().exam_type == existing().exam_type
+        && incoming().session_mode == existing().session_mode
+        && incoming().session_number == existing().session_number
+        && incoming().total_soal == existing().total_soal
+        && incoming().created_at == existing().created_at
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Update elapsed timer progress while IN_PROGRESS
+          (
+            incoming().status == 'IN_PROGRESS'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['durasi_pengerjaan_detik', 'updatedAt'])
+          )
+          ||
+          // Action 2: Submit and lock session to COMPLETED terminal state
+          (
+            incoming().status == 'COMPLETED'
+            && incoming().completed_at is string
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'durasi_pengerjaan_detik', 'skor_twk', 'skor_tiu', 'skor_tkp',
+              'skor_total', 'skor_maksimal', 'persentase_total', 'lulus_passing_grade',
+              'breakdown_skor', 'topik_rekomendasi', 'completed_at', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(sessionId)
+        && existing().userId == request.auth.uid;
+
+      // === Subcollection: /sessions/{sessionId}/answers/{answerId} (Master Gate + Atomicity) ===
+      match /answers/{answerId} {
+        allow get: if isSignedIn()
+          && isValidId(sessionId)
+          && isValidId(answerId)
+          && existing().userId == request.auth.uid
+          && get(/databases/$(database)/documents/sessions/$(sessionId)).data.userId == request.auth.uid;
+
+        allow list: if isSignedIn()
+          && isValidId(sessionId)
+          && existing().userId == request.auth.uid;
+
+        allow create: if isVerifiedUser()
+          && isValidId(sessionId)
+          && isValidId(answerId)
+          && isValidSessionAnswer(incoming(), sessionId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.userId == request.auth.uid
+          && getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.status == 'IN_PROGRESS';
+
+        allow update: if isVerifiedUser()
+          && isValidId(sessionId)
+          && isValidId(answerId)
+          && isValidSessionAnswer(incoming(), sessionId)
+          && existing().userId == request.auth.uid
+          && incoming().id == existing().id
+          && incoming().sessionId == existing().sessionId
+          && incoming().userId == existing().userId
+          && incoming().question_id == existing().question_id
+          && incoming().urutan == existing().urutan
+          && incoming().opsi_order == existing().opsi_order
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/sessions/$(sessionId)).data.userId == request.auth.uid
+          && get(/databases/$(database)/documents/sessions/$(sessionId)).data.status == 'IN_PROGRESS'
+          && (
+            // Action 1: Save answer choice or flag during IN_PROGRESS
+            incoming().diff(existing()).affectedKeys().hasOnly(['jawaban_user', 'ditandai', 'updatedAt'])
+            ||
+            // Action 2: Grade answer atomically during session submission
+            (
+              getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.status == 'COMPLETED'
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'poin', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(sessionId)
+          && isValidId(answerId)
+          && existing().userId == request.auth.uid
+          && get(/databases/$(database)/documents/sessions/$(sessionId)).data.userId == request.auth.uid;
+      }
+    }
+  }
+}

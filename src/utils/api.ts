@@ -14,7 +14,27 @@ import type {
   SessionDetailResponse,
   SessionSummary,
 } from '../shared/types';
+import { isFirebaseConfigured } from '../firebase';
 import { ApiError } from './errors';
+import {
+  firebaseCreateSkbSession,
+  firebaseCreateSkdSession,
+  firebaseDeleteSession,
+  firebaseFetchAnswerHint,
+  firebaseFetchCurrentUser,
+  firebaseFetchQuestionsBank,
+  firebaseFetchSessionDetail,
+  firebaseFetchSessions,
+  firebaseLoginWithEmail,
+  firebaseLoginWithGoogle,
+  firebaseLogout,
+  firebaseRegisterWithEmail,
+  firebaseReloadCurrentUser,
+  firebaseResendVerification,
+  firebaseSaveSessionAnswer,
+  firebaseSubmitSession,
+  subscribeFirebaseAuth,
+} from './firebaseEngine';
 import {
   localCreateSkbSession,
   localCreateSkdSession,
@@ -32,11 +52,21 @@ import {
   localSubmitSession,
 } from './localEngine';
 
-export { ApiError };
+export { ApiError, subscribeFirebaseAuth };
 
 const AUTH_TOKEN_KEY = 'cat_asn_jwt_token_v1';
 
-let backendModePromise: Promise<'remote' | 'local'> | null = null;
+let backendModePromise: Promise<'firebase' | 'remote' | 'local'> | null = null;
+
+export function isFirebaseStorageMode(): boolean {
+  if (import.meta.env.VITE_STORAGE_MODE === 'local') {
+    return false;
+  }
+  if (import.meta.env.VITE_STORAGE_MODE === 'remote') {
+    return false;
+  }
+  return isFirebaseConfigured;
+}
 
 export function getStoredToken(): string | null {
   try {
@@ -60,9 +90,12 @@ export function setStoredToken(token: string | null): void {
   }
 }
 
-async function detectBackendMode(): Promise<'remote' | 'local'> {
+async function detectBackendMode(): Promise<'firebase' | 'remote' | 'local'> {
   if (import.meta.env.VITE_STORAGE_MODE === 'local') {
     return 'local';
+  }
+  if (isFirebaseStorageMode()) {
+    return 'firebase';
   }
   if (!backendModePromise) {
     backendModePromise = (async () => {
@@ -127,14 +160,36 @@ export async function fetchHealth(): Promise<{
   bankStats: QuestionBankStats;
   categories: CategoryMeta[];
 }> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'local' || mode === 'firebase') {
     return localFetchHealth();
   }
   return requestJson('/api/health');
 }
 
+export async function loginWithGoogleAccount(): Promise<AuthResponse> {
+  if (!isFirebaseStorageMode()) {
+    throw new ApiError(400, 'Login Google hanya tersedia saat Firebase Cloud aktif.');
+  }
+  return firebaseLoginWithGoogle();
+}
+
+export async function resendVerificationEmail(): Promise<void> {
+  if (!isFirebaseStorageMode()) return;
+  return firebaseResendVerification();
+}
+
+export async function reloadFirebaseUserAccount(): Promise<AuthUser | null> {
+  if (!isFirebaseStorageMode()) return null;
+  return firebaseReloadCurrentUser();
+}
+
 export async function registerAccount(payload: RegisterPayload): Promise<AuthResponse> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseRegisterWithEmail(payload);
+  }
+  if (mode === 'local') {
     const res = await localRegisterUser(payload);
     setStoredToken(res.token);
     return res;
@@ -148,7 +203,11 @@ export async function registerAccount(payload: RegisterPayload): Promise<AuthRes
 }
 
 export async function loginAccount(payload: LoginPayload): Promise<AuthResponse> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseLoginWithEmail(payload);
+  }
+  if (mode === 'local') {
     const res = await localLoginUser(payload);
     setStoredToken(res.token);
     return res;
@@ -163,14 +222,22 @@ export async function loginAccount(payload: LoginPayload): Promise<AuthResponse>
 
 export async function logoutAccount(): Promise<{ ok: boolean }> {
   setStoredToken(null);
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseLogout();
+  }
+  if (mode === 'local') {
     return localLogoutUser();
   }
   return requestJson('/api/auth/logout', { method: 'POST' });
 }
 
 export async function fetchCurrentUser(): Promise<{ user: AuthUser }> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseFetchCurrentUser();
+  }
+  if (mode === 'local') {
     return localFetchCurrentUser();
   }
   return requestJson('/api/auth/me');
@@ -179,7 +246,11 @@ export async function fetchCurrentUser(): Promise<{ user: AuthUser }> {
 export async function fetchSessions(
   examType?: ExamType
 ): Promise<{ sessions: SessionSummary[] }> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseFetchSessions(examType);
+  }
+  if (mode === 'local') {
     return localFetchSessions(examType);
   }
   const qs = examType ? `?examType=${examType}` : '';
@@ -189,7 +260,11 @@ export async function fetchSessions(
 export async function createSkdSession(
   payload: CreateSkdSessionPayload
 ): Promise<SessionDetailResponse> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseCreateSkdSession(payload);
+  }
+  if (mode === 'local') {
     return localCreateSkdSession(payload);
   }
   return requestJson('/api/skd/sessions', {
@@ -201,7 +276,11 @@ export async function createSkdSession(
 export async function createSkbSession(
   payload: CreateSkbSessionPayload
 ): Promise<SessionDetailResponse> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseCreateSkbSession(payload);
+  }
+  if (mode === 'local') {
     return localCreateSkbSession(payload);
   }
   return requestJson('/api/skb/sessions', {
@@ -213,7 +292,11 @@ export async function createSkbSession(
 export async function fetchSessionDetail(
   sessionId: number
 ): Promise<SessionDetailResponse> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseFetchSessionDetail(sessionId);
+  }
+  if (mode === 'local') {
     return localFetchSessionDetail(sessionId);
   }
   return requestJson(`/api/sessions/${sessionId}`);
@@ -223,7 +306,11 @@ export async function fetchAnswerHint(
   sessionId: number,
   answerId: number
 ): Promise<HintResponse> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseFetchAnswerHint(sessionId, answerId);
+  }
+  if (mode === 'local') {
     return localFetchAnswerHint(sessionId, answerId);
   }
   return requestJson(`/api/sessions/${sessionId}/answers/${answerId}/hint`);
@@ -238,7 +325,11 @@ export async function saveSessionAnswer(
     elapsedSeconds?: number;
   }
 ): Promise<{ ok: boolean }> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseSaveSessionAnswer(sessionId, payload);
+  }
+  if (mode === 'local') {
     return localSaveSessionAnswer(sessionId, payload);
   }
   return requestJson(`/api/sessions/${sessionId}/answer`, {
@@ -251,7 +342,11 @@ export async function submitSession(
   sessionId: number,
   elapsedSeconds?: number
 ): Promise<SessionDetailResponse> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseSubmitSession(sessionId, elapsedSeconds);
+  }
+  if (mode === 'local') {
     return localSubmitSession(sessionId, elapsedSeconds);
   }
   return requestJson(`/api/sessions/${sessionId}/submit`, {
@@ -261,7 +356,11 @@ export async function submitSession(
 }
 
 export async function deleteSession(sessionId: number): Promise<{ ok: boolean }> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseDeleteSession(sessionId);
+  }
+  if (mode === 'local') {
     return localDeleteSession(sessionId);
   }
   return requestJson(`/api/sessions/${sessionId}`, {
@@ -274,7 +373,11 @@ export async function fetchQuestionsBank(params?: {
   kategori?: string;
   q?: string;
 }): Promise<{ total: number; questions: QuestionRecord[] }> {
-  if ((await detectBackendMode()) === 'local') {
+  const mode = await detectBackendMode();
+  if (mode === 'firebase') {
+    return firebaseFetchQuestionsBank(params);
+  }
+  if (mode === 'local') {
     return localFetchQuestionsBank(params);
   }
   const search = new URLSearchParams();

@@ -21,14 +21,14 @@ export const SEED_CATEGORIES: CategoryMeta[] = [
     kode: 'TIU',
     exam_type: 'SKD',
     nama: 'Tes Intelegensia Umum',
-    deskripsi: 'Penalaran verbal, analitis, silogisme, deret angka, perbandingan kuantitatif, dan numerik HOTS.',
+    deskripsi: 'Verbal (analogi, silogisme, bacaan), Numerik (berhitung cepat, deret HOTS, perbandingan X vs Y, cerita), dan Figural SVG.',
     urutan: 2,
   },
   {
     kode: 'TKP',
     exam_type: 'SKD',
     nama: 'Tes Karakteristik Pribadi',
-    deskripsi: 'Pelayanan publik, jejaring kerja, sosial budaya, TIK, profesionalisme, dan anti-radikalisme (poin 1–5).',
+    deskripsi: 'Pelayanan Publik, Profesionalisme, Jejaring Kerja & Sosial Budaya, TIK, dan Antiradikalisme (bobot skor 1–5).',
     urutan: 3,
   },
   {
